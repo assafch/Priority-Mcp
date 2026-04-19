@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "priority": {
+      "command": "npx",
+      "args": ["-y", "priority-mcp-server"],
+      "env": {
+        "PRIORITY_API_URL": "https://your-priority-server.com/odata/Priority/tabula.ini",
+        "PRIORITY_ENVIRONMENT": "wlnd",
+        "PRIORITY_COMPANY": "demodata",
+        "PRIORITY_USERNAME": "apiuser",
+        "PRIORITY_PASSWORD": "your-password"
+      }
+    }
+  }
+}
