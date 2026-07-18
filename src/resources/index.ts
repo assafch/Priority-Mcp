@@ -1,35 +1,45 @@
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { type McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { toMcpError } from '../client/errors.js';
+import { parseCsdlEntity } from '../lib/csdl.js';
 
 export function registerAllResources(server: McpServer, client: PriorityClient, config: Config) {
-  // Schema resource template — get schema for any entity
+  // Schema resource TEMPLATE — get schema for any entity. Must be registered via ResourceTemplate:
+  // passing the "priority://schema/{entity}" string directly registers a STATIC resource at that
+  // literal URI, so {entity} never binds and every real read returns "resource not found".
   server.resource(
     'entity-schema',
-    'priority://schema/{entity}',
+    new ResourceTemplate('priority://schema/{entity}', { list: undefined }),
     {
       description: 'JSON schema of a Priority entity — lists all fields and their types.',
       mimeType: 'application/json',
     },
-    async (uri, _params) => {
+    async (uri, variables) => {
       try {
-        const entity = uri.pathname.split('/').pop() ?? '';
-        const metadata = await client.request<string>('$metadata', undefined, undefined, { cache: true });
-        const xml = String(metadata);
-        const regex = new RegExp(`<EntityType Name="${entity}"[^>]*>([\\s\\S]*?)</EntityType>`);
-        const match = xml.match(regex);
-        const fields = match
-          ? [...match[1].matchAll(/Property Name="([^"]+)"[^>]*Type="([^"]+)"/g)].map((m) => ({ name: m[1], type: m[2] }))
-          : [];
+        const raw = variables.entity;
+        const entity = String(Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? ''));
+        // GetMetadataFor(entity) returns just this form's CSDL (fast) — far cheaper than the full
+        // $metadata document, which can take 60–90s and exceed the client timeout.
+        const metadata = await client.getMetadataFor<unknown>(entity);
+        const parsed = typeof metadata === 'string' ? parseCsdlEntity(metadata, entity) : null;
+        const payload =
+          parsed ??
+          (typeof metadata === 'object' && metadata !== null
+            ? metadata
+            : { entity, fields: [], note: 'Metadata unavailable or could not be parsed.' });
         return {
-          contents: [{
-            uri: uri.href,
-            mimeType: 'application/json',
-            text: JSON.stringify({ entity, fields, fieldCount: fields.length }, null, 2),
-          }],
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: 'application/json',
+              text: JSON.stringify(payload, null, 2),
+            },
+          ],
         };
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -42,17 +52,23 @@ export function registerAllResources(server: McpServer, client: PriorityClient, 
       mimeType: 'application/json',
     },
     async (uri) => ({
-      contents: [{
-        uri: uri.href,
-        mimeType: 'application/json',
-        text: JSON.stringify({
-          environment: config.priorityEnvironment,
-          company: config.priorityCompany,
-          language: config.priorityLanguage,
-          apiUrl: config.priorityApiUrl,
-          readOnly: config.priorityReadOnly,
-        }, null, 2),
-      }],
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(
+            {
+              environment: config.priorityEnvironment,
+              company: config.priorityCompany,
+              language: config.priorityLanguage,
+              apiUrl: config.priorityApiUrl,
+              readOnly: config.priorityReadOnly,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
     }),
   );
 
@@ -65,17 +81,23 @@ export function registerAllResources(server: McpServer, client: PriorityClient, 
       mimeType: 'application/json',
     },
     async (uri) => ({
-      contents: [{
-        uri: uri.href,
-        mimeType: 'application/json',
-        text: JSON.stringify({
-          username: config.priorityUsername,
-          environment: config.priorityEnvironment,
-          company: config.priorityCompany,
-          language: config.priorityLanguage,
-          readOnly: config.priorityReadOnly,
-        }, null, 2),
-      }],
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(
+            {
+              username: config.priorityUsername,
+              environment: config.priorityEnvironment,
+              company: config.priorityCompany,
+              language: config.priorityLanguage,
+              readOnly: config.priorityReadOnly,
+            },
+            null,
+            2,
+          ),
+        },
+      ],
     }),
   );
 }

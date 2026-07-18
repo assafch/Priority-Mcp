@@ -1,6 +1,32 @@
 # Tool Reference
 
-priority-mcp-server exposes **72 tools** across 12 domains.
+priority-mcp-server exposes **80 tools**: 8 generic building blocks plus 72 domain tools.
+
+## Generic / Building Blocks (8 tools)
+
+Form-agnostic tools that work against any Priority form. Prefer these when the curated domain
+tools don't fit. Discover exact form/field/sub-form names first, then read or write.
+
+| Tool | Type | Description |
+|------|------|-------------|
+| `priority_list_forms` | Read | List the forms (entity sets) this installation exposes to the API (OData service root) |
+| `priority_get_entity_metadata` | Read | `GetMetadataFor(entity='X')` — field names, types, titles, mandatory flags (Priority 25.0+) |
+| `priority_describe_form` | Read | Universal fallback — infers fields from one sample row (`{form}?$top=1`) |
+| `priority_query` | Read | Structured query: `filter` / `select` / `expand` / `orderby` / `top` / `skip` |
+| `priority_get_record` | Read | Fetch one record by key (+ optional `select`/`expand`) |
+| `priority_create_record` | Write | POST a record; supports OData **deep-insert** (header + sub-form line arrays) |
+| `priority_update_record` | Write | PATCH fields on an existing record |
+| `priority_add_line` | Write | POST a single line to a record's sub-form (navigation property) |
+
+**Write safety:** the three write tools take `confirm` (default `false`). With `confirm:false`
+they return a DRY-RUN of the exact method + endpoint + JSON body and send nothing; `confirm:true`
+executes (still blocked by `PRIORITY_READ_ONLY=true`).
+
+**OData value rules:** strings in single quotes with `''` for embedded quotes (`name eq 'O''Brien'`);
+decimals with `.` (`TOTPRICE gt 1000.50`); dates unquoted ISO 8601 (`CURDATE ge 2026-05-01T00:00:00Z`);
+Hebrew/spaces are fine inside quotes (values are percent-encoded automatically). For deep-insert,
+put sub-form lines as an array under the sub-form's navigation-property name (confirm it via
+`priority_get_entity_metadata`).
 
 ## Customers (10 tools)
 

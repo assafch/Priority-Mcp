@@ -10,8 +10,10 @@ export function createLogger(config: Config) {
         : { target: 'pino/file', options: { destination: 2 } }, // always stderr, stdout is MCP
     redact: {
       paths: [
+        'priorityPat',
         'priorityPassword',
         'password',
+        'pat',
         'authorization',
         'req.headers.authorization',
         '*.phone',
