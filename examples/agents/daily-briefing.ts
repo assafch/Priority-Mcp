@@ -15,8 +15,8 @@
  *   Plus all PRIORITY_* env vars (the MCP server runs as a subprocess)
  */
 
-import { generateText } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
+import { generateText } from 'ai';
 
 const today = new Date().toISOString().slice(0, 10);
 

@@ -11,7 +11,8 @@ export class RateLimiter {
     this.timestamps = this.timestamps.filter((t) => now - t < 60_000);
 
     if (this.timestamps.length >= this.maxPerMinute) {
-      const waitMs = 60_000 - (now - this.timestamps[0]!);
+      const oldest = this.timestamps[0] ?? now;
+      const waitMs = 60_000 - (now - oldest);
       await new Promise((resolve) => setTimeout(resolve, waitMs));
       return this.acquire();
     }

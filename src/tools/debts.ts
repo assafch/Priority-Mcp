@@ -1,35 +1,69 @@
-import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { toMcpError } from '../client/errors.js';
+import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { ODataBuilder } from '../client/odata-builder.js';
-import { toMcpError } from '../client/errors.js';
-import { sanitizeODataValue } from '../lib/sanitize.js';
-import { checkWriteAllowed, dryRunResult, textResult } from '../lib/write-guard.js';
+import { getSchema } from '../lib/priority-schema.js';
+import { textResult, unavailableHere } from '../lib/write-guard.js';
+
+const OBLIGO = getSchema('OBLIGO');
 
 export function registerDebtTools(server: McpServer, client: PriorityClient, config: Config) {
   server.tool(
     'priority_get_open_debts',
-    `Get all open accounts receivable (AR) debts.
+    `Get open accounts-receivable (A/R) balances by customer — "who owes us money".
 
-Filterable by aging bucket, minimum amount, and salesperson.
-Returns invoices that have an outstanding balance. Sorted by amount descending by default.
-Use this for collection workflows and AR management.`,
+Returns each customer with a positive open balance (OBLIGO.CREDIT), highest first.
+Filterable by minimum amount and sales rep. For the individual open invoices behind a
+customer's balance, use priority_get_unpaid_invoices_for_customer.`,
     {
-      minAmount: z.number().optional().describe('Minimum outstanding amount'),
-      salesRep: z.string().optional().describe('Filter by sales rep name'),
-      agingBucket: z.enum(['0-30', '31-60', '61-90', '90+']).optional().describe('Filter by aging bucket'),
+      minAmount: z.number().optional().describe('Minimum open balance'),
+      salesRep: z.string().optional().describe('Filter by exact sales rep name (AGENTNAME)'),
+      agingBucket: z
+        .enum(['0-30', '31-60', '61-90', '90+'])
+        .optional()
+        .describe('Filter by aging bucket (not available on this install)'),
       top: z.number().int().min(1).max(500).default(100),
       skip: z.number().int().min(0).default(0),
     },
     async (params) => {
       try {
-        const qb = new ODataBuilder().top(params.top).skip(params.skip).orderBy('DEBIT', 'desc');
-        if (params.minAmount !== undefined) qb.ge('DEBIT', params.minAmount);
-        if (params.salesRep) qb.contains('SNAME', sanitizeODataValue(params.salesRep));
-        const result = await client.list('OPENDEBT', qb.build());
-        return textResult({ debts: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+        // Use OBLIGO, NOT OPENINVOICES. On this install OPENINVOICES holds open DELIVERY NOTES /
+        // RETURNS awaiting invoicing (DOCCODE "משלק"/"החלק"), so it hides the real debt of
+        // customers whose open A/R is issued-but-unreconciled invoices. OBLIGO.CREDIT is the
+        // customer's open A/R balance (same source priority_get_top_debtors trusts).
+        const qb = new ODataBuilder()
+          .gt('CREDIT', 0)
+          .orderBy('CREDIT', 'desc')
+          .top(params.top)
+          .skip(params.skip);
+        if (params.minAmount !== undefined) qb.ge('CREDIT', params.minAmount);
+        if (params.salesRep) qb.eq('AGENTNAME', params.salesRep);
+        if (OBLIGO?.defaultSelect) qb.select(...OBLIGO.defaultSelect);
+        const result = await client.list<Record<string, unknown>>('OBLIGO', qb.build());
+        const debts = result.value.map((o) => ({
+          customerId: o.CUSTNAME,
+          name: o.CUSTDES,
+          openBalance: Number(o.CREDIT) || 0,
+          creditLimit: Number(o.MAX_CREDIT) || 0,
+          availableCredit: Number(o.CREDIT_REST) || 0,
+          salesRep: o.AGENTNAME,
+        }));
+        const unsupported: string[] = [];
+        if (params.agingBucket)
+          unsupported.push(
+            'agingBucket (OBLIGO carries no aging-bucket column; use priority_get_customer_aging for a single customer)',
+          );
+        return textResult({
+          debts,
+          ...(unsupported.length ? { ignoredFilters: unsupported } : {}),
+          pagination: { returned: debts.length, top: params.top, skip: params.skip },
+          note: 'Open A/R by customer from OBLIGO.CREDIT (positive balances only). Source corrected: OPENINVOICES, used previously, lists un-invoiced delivery notes rather than issued A/R.',
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -43,11 +77,13 @@ Use this for a high-level view of collection exposure. For a single customer, us
       top: z.number().int().min(1).max(500).default(200),
       skip: z.number().int().min(0).default(0),
     },
-    async (params) => {
-      try {
-        const result = await client.list('AGED_BALANCES', new ODataBuilder().top(params.top).skip(params.skip).build());
-        return textResult({ agingReport: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+    async (_params) => {
+      // AGED_BALANCES is not exposed as an OData entity on this install.
+      return unavailableHere(
+        'The AGED_BALANCES form is not exposed to the API on this installation.',
+        'Use priority_get_open_debts (OPENINVOICES) for the open-invoice list, or expose an aged-debts ' +
+          'form (e.g. AGEDEBTS_WORKAREA / ACCOUNTS_RECEIVABLE) to the API for true aging buckets.',
+      );
     },
   );
 
@@ -62,17 +98,15 @@ Use for collection prioritization. Returns invoice number, customer, amount, due
       top: z.number().int().min(1).max(500).default(100),
       skip: z.number().int().min(0).default(0),
     },
-    async (params) => {
-      try {
-        const today = new Date().toISOString().split('T')[0];
-        const qb = new ODataBuilder()
-          .filter(`PAYDATE lt '${today}'`)
-          .top(params.top).skip(params.skip)
-          .orderBy('PAYDATE', 'asc');
-        if (params.minAmount !== undefined) qb.ge('DEBIT', params.minAmount);
-        const result = await client.list('OPENDEBT', qb.build());
-        return textResult({ overdueInvoices: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+    async (_params) => {
+      // The exposed open-A/R form (OPENINVOICES) has no due-date (PAYDATE) column, so
+      // overdue-by-due-date cannot be computed; OPENDEBT (which had PAYDATE) is not exposed.
+      return unavailableHere(
+        'Overdue-by-due-date needs a due-date (PAYDATE) column. OPENDEBT is not exposed here and ' +
+          'the exposed OPENINVOICES form has no PAYDATE.',
+        'Use priority_get_open_debts (OPENINVOICES, sorted by amount) for open invoices, or expose a ' +
+          'form carrying PAYDATE (e.g. OPENDEBT) to the API to rank by days overdue.',
+      );
     },
   );
 
@@ -85,15 +119,13 @@ Useful for credit decisions and collection strategy. Looks at paid invoices for 
       customerId: z.string().min(1).describe('The CUSTNAME'),
       top: z.number().int().min(1).max(500).default(100),
     },
-    async (params) => {
-      try {
-        const qb = new ODataBuilder()
-          .eq('CUSTNAME', params.customerId)
-          .top(params.top)
-          .orderBy('PAYDATE', 'desc');
-        const result = await client.list('PAYMENTHIST', qb.build());
-        return textResult({ customerId: params.customerId, payments: result.value, count: result.value.length });
-      } catch (err) { throw toMcpError(err); }
+    async (_params) => {
+      // PAYMENTHIST is not exposed as an OData entity on this install.
+      return unavailableHere(
+        'The PAYMENTHIST form is not exposed to the API on this installation.',
+        'Receipt/payment forms such as TINVOICES (קבלות) or the PAYMENT* forms may be exposed — ' +
+          'discover with priority_list_forms and query the right one via priority_query.',
+      );
     },
   );
 
@@ -107,14 +139,22 @@ Quick view for management — who owes the most. Sorted by total open balance de
     },
     async (params) => {
       try {
-        const qb = new ODataBuilder()
-          .gt('CUSTBALANCE', 0)
-          .select('CUSTNAME', 'CUSTDES', 'CUSTBALANCE', 'CREDITLIMIT', 'SNAME')
-          .orderBy('CUSTBALANCE', 'desc')
-          .top(params.top);
-        const result = await client.list('CUSTOMERS', qb.build());
-        return textResult({ topDebtors: result.value });
-      } catch (err) { throw toMcpError(err); }
+        // CUSTOMERS has no balance field; OBLIGO carries the open A/R balance (CREDIT).
+        const qb = new ODataBuilder().gt('CREDIT', 0).orderBy('CREDIT', 'desc').top(params.top);
+        if (OBLIGO?.defaultSelect) qb.select(...OBLIGO.defaultSelect);
+        const result = await client.list<Record<string, unknown>>('OBLIGO', qb.build());
+        const topDebtors = result.value.map((o) => ({
+          customerId: o.CUSTNAME,
+          name: o.CUSTDES,
+          balance: Number(o.CREDIT) || 0,
+          creditLimit: Number(o.MAX_CREDIT) || 0,
+          availableCredit: Number(o.CREDIT_REST) || 0,
+          salesRep: o.AGENTNAME,
+        }));
+        return textResult({ topDebtors });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -132,47 +172,37 @@ Quick view for management — who owes the most. Sorted by total open balance de
       notes: z.string().optional().describe('Additional notes'),
       dryRun: z.boolean().default(true),
     },
-    async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
-      try {
-        const body: Record<string, unknown> = {
-          CUSTNAME: params.customerId,
-          TYPEDES: 'Payment Promise',
-          SUBJECT: `Payment promise: ${params.promisedDate}${params.amount ? ` for ${params.amount}` : ''}`,
-          EXPIRYDATE: params.promisedDate,
-          CURDATE: new Date().toISOString().split('T')[0],
-        };
-        if (params.notes) body.DETAILS = params.notes;
-
-        if (params.dryRun) return dryRunResult('RECORD PAYMENT PROMISE', body);
-
-        const result = await client.create('PHONEBOOK', body);
-        return textResult({ recorded: true, activity: result });
-      } catch (err) { throw toMcpError(err); }
-    },
+    async () =>
+      // This logged the promise as a PHONEBOOK row, but PHONEBOOK is the contacts master on this
+      // install (not an activity log) and lacks TYPEDES/SUBJECT/EXPIRYDATE — the write would
+      // create/garble a contact. Disabled until the real CRM activity form is identified.
+      unavailableHere(
+        'Recording a payment promise needs a CRM activity form; PHONEBOOK here is the contacts ' +
+          'master (no activity fields), so this write is disabled to avoid corrupting contact data.',
+        'Identify the activity form via priority_list_forms (e.g. GENDIARY / TODOLIST / DOCUMENTS_*) ' +
+          'and log it with priority_create_record.',
+      ),
   );
 
   server.tool(
     'priority_mark_invoice_disputed',
     `Flag an invoice as disputed with a reason.
 
-⚠️ WRITE OPERATION — marks invoice with dispute status. Use dryRun=true (default) to preview.`,
+⚠️ WRITE OPERATION. NOTE: disabled on this installation — see the response for why.`,
     {
       invoiceNumber: z.string().min(1).describe('IVNUM'),
       reason: z.string().min(1).describe('Dispute reason'),
       dryRun: z.boolean().default(true),
     },
-    async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
-      try {
-        const body = { STATDES: 'disputed', DETAILS: params.reason };
-        if (params.dryRun) return dryRunResult('MARK DISPUTED ' + params.invoiceNumber, body);
-
-        const result = await client.update('AINVOICES', params.invoiceNumber, body);
-        return textResult({ disputed: true, invoiceNumber: params.invoiceNumber, result });
-      } catch (err) { throw toMcpError(err); }
-    },
+    // Disabled: PATCHed AINVOICES(invoiceNumber) — a single-value key on a COMPOSITE-keyed form
+    // (404s) — and set STATDES to 'disputed', which is not a real Priority invoice status on this
+    // install (statuses are טיוטא/סופית/מבוטלת). There is no native "disputed" state to set.
+    async () =>
+      unavailableHere(
+        "Flagging an invoice 'disputed' isn't supported here: AINVOICES is composite-keyed (a " +
+          "single-key PATCH 404s) and 'disputed' is not a Priority invoice status.",
+        'Track disputes with a CRM activity/note form (discover via priority_list_forms) linked to the ' +
+          'customer or invoice, rather than mutating the invoice status.',
+      ),
   );
 }

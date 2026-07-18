@@ -1,7 +1,7 @@
-import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { PriorityClient } from '../client/priority-client.js';
+import { z } from 'zod';
 import { toMcpError } from '../client/errors.js';
+import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 
 function textResult(data: unknown) {
@@ -18,11 +18,17 @@ Useful when exploring the API or when the AI needs to find the right entity for 
     {},
     async () => {
       try {
-        const result = await client.request<string>('$metadata', undefined, undefined, { cache: true });
+        const result = await client.request<string>('$metadata', undefined, undefined, {
+          cache: true,
+        });
         // $metadata returns XML — extract entity names
-        const entityNames = [...String(result).matchAll(/EntityType Name="([^"]+)"/g)].map((m) => m[1]);
+        const entityNames = [...String(result).matchAll(/EntityType Name="([^"]+)"/g)].map(
+          (m) => m[1],
+        );
         return textResult({ entities: entityNames, count: entityNames.length });
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -37,19 +43,28 @@ Example: priority_get_entity_schema({ entity: "CUSTOMERS" }) → shows all custo
     },
     async (params) => {
       try {
-        const result = await client.request<string>('$metadata', undefined, undefined, { cache: true });
+        const result = await client.request<string>('$metadata', undefined, undefined, {
+          cache: true,
+        });
         const xml = String(result);
         // Extract the specific entity type definition
-        const regex = new RegExp(`<EntityType Name="${params.entity}"[^>]*>([\\s\\S]*?)</EntityType>`);
+        const regex = new RegExp(
+          `<EntityType Name="${params.entity}"[^>]*>([\\s\\S]*?)</EntityType>`,
+        );
         const match = xml.match(regex);
         if (!match) {
-          return textResult({ error: `Entity "${params.entity}" not found. Use priority_list_entities to see available entities.` });
+          return textResult({
+            error: `Entity "${params.entity}" not found. Use priority_list_entities to see available entities.`,
+          });
         }
         // Extract properties
-        const props = [...match[1].matchAll(/Property Name="([^"]+)"[^>]*Type="([^"]+)"/g)]
-          .map((m) => ({ name: m[1], type: m[2] }));
+        const props = [...match[1].matchAll(/Property Name="([^"]+)"[^>]*Type="([^"]+)"/g)].map(
+          (m) => ({ name: m[1], type: m[2] }),
+        );
         return textResult({ entity: params.entity, fields: props, fieldCount: props.length });
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -63,13 +78,15 @@ Useful for multi-company setups to see which company databases are accessible.`,
       try {
         const result = await client.list('COMPANIES', '?$top=100');
         return textResult({ companies: result.value });
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
   server.tool(
     'priority_get_current_user',
-    `Get information about the currently authenticated API user.`,
+    'Get information about the currently authenticated API user.',
     {},
     async () => {
       try {
@@ -79,7 +96,9 @@ Useful for multi-company setups to see which company databases are accessible.`,
           language: config.priorityLanguage,
           readOnly: config.priorityReadOnly,
         });
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -105,7 +124,9 @@ Example: entity="CUSTOMERS", query="?$filter=CUSTBALANCE gt 5000&$select=CUSTNAM
         }
         const result = await client.list(params.entity, params.query);
         return textResult({ value: result.value, count: result.value.length });
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 }

@@ -1,16 +1,24 @@
-import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { toMcpError } from '../client/errors.js';
+import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { ODataBuilder } from '../client/odata-builder.js';
-import { toMcpError } from '../client/errors.js';
+import { dateFrom, dateTo } from '../lib/dates.js';
+import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
-import { checkWriteAllowed, dryRunResult, textResult } from '../lib/write-guard.js';
+import { previewOrBlock, textResult } from '../lib/write-guard.js';
 
-export function registerPurchaseOrderTools(server: McpServer, client: PriorityClient, config: Config) {
+const PORDERS = getSchema('PORDERS');
+
+export function registerPurchaseOrderTools(
+  server: McpServer,
+  client: PriorityClient,
+  config: Config,
+) {
   server.tool(
     'priority_list_purchase_orders',
-    `List purchase orders with optional filters by supplier, status, and date.`,
+    'List purchase orders with optional filters by supplier, status, and date.',
     {
       supplierId: z.string().optional().describe('Filter by SUPNAME'),
       status: z.string().optional().describe('Filter by status'),
@@ -22,20 +30,29 @@ export function registerPurchaseOrderTools(server: McpServer, client: PriorityCl
     },
     async (params) => {
       try {
-        const qb = new ODataBuilder().top(params.top).skip(params.skip).orderBy('CURDATE', params.orderDir);
+        const qb = new ODataBuilder()
+          .top(params.top)
+          .skip(params.skip)
+          .orderBy('CURDATE', params.orderDir);
         if (params.supplierId) qb.eq('SUPNAME', sanitizeODataValue(params.supplierId));
         if (params.status) qb.eq('STATDES', sanitizeODataValue(params.status));
-        if (params.dateFrom) qb.ge('CURDATE', params.dateFrom);
-        if (params.dateTo) qb.le('CURDATE', params.dateTo);
+        if (params.dateFrom) qb.ge('CURDATE', dateFrom(params.dateFrom));
+        if (params.dateTo) qb.le('CURDATE', dateTo(params.dateTo));
+        if (PORDERS?.defaultSelect) qb.select(...PORDERS.defaultSelect);
         const result = await client.list('PORDERS', qb.build());
-        return textResult({ purchaseOrders: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+        return textResult({
+          purchaseOrders: result.value,
+          pagination: { returned: result.value.length, top: params.top, skip: params.skip },
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
   server.tool(
     'priority_get_purchase_order',
-    `Get a single purchase order with line items.`,
+    'Get a single purchase order with line items.',
     {
       poNumber: z.string().min(1).describe('The PORDNAME (PO number)'),
       expand: z.array(z.string()).optional(),
@@ -46,7 +63,9 @@ export function registerPurchaseOrderTools(server: McpServer, client: PriorityCl
         const qb = new ODataBuilder().expand(...expands);
         const po = await client.get('PORDERS', params.poNumber, qb.build());
         return textResult(po);
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -60,13 +79,17 @@ Useful for inventory planning — shows what's coming in and when.`,
     },
     async (params) => {
       try {
+        // PORDERS closed flag is CLOSEDBOOL (Y/blank); there is no EXPIRYDATE — order by date.
         const qb = new ODataBuilder()
-          .eq('CLOSED', 'N')
-          .orderBy('EXPIRYDATE', 'asc')
+          .filter("CLOSEDBOOL ne 'Y'")
+          .orderBy('CURDATE', 'asc')
           .top(params.top);
+        if (PORDERS?.defaultSelect) qb.select(...PORDERS.defaultSelect);
         const result = await client.list('PORDERS', qb.build());
         return textResult({ incomingShipments: result.value, count: result.value.length });
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -79,17 +102,19 @@ Useful for inventory planning — shows what's coming in and when.`,
 ⚠️ WRITE OPERATION. Use dryRun=true (default) to preview.`,
     {
       supplierId: z.string().min(1).describe('SUPNAME'),
-      items: z.array(z.object({
-        productId: z.string().min(1).describe('PARTNAME'),
-        quantity: z.number().positive(),
-        price: z.number().optional().describe('Unit price override'),
-      })).min(1),
+      items: z
+        .array(
+          z.object({
+            productId: z.string().min(1).describe('PARTNAME'),
+            quantity: z.number().positive(),
+            price: z.number().optional().describe('Unit price override'),
+          }),
+        )
+        .min(1),
       remarks: z.string().optional(),
       dryRun: z.boolean().default(true),
     },
     async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
       try {
         const body: Record<string, unknown> = {
           SUPNAME: params.supplierId,
@@ -101,11 +126,14 @@ Useful for inventory planning — shows what's coming in and when.`,
         };
         if (params.remarks) body.DETAILS = params.remarks;
 
-        if (params.dryRun) return dryRunResult('CREATE PURCHASE ORDER', body);
+        const gate = previewOrBlock(config, params.dryRun, 'CREATE PURCHASE ORDER', body);
+        if (gate) return gate;
 
         const result = await client.create('PORDERS', body);
         return textResult({ created: true, purchaseOrder: result });
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 }

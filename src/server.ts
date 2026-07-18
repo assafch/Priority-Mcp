@@ -1,10 +1,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { PriorityClient } from './client/priority-client.js';
 import type { Config } from './config.js';
 import type { Logger } from './logger.js';
-import { PriorityClient } from './client/priority-client.js';
-import { registerAllTools } from './tools/index.js';
-import { registerAllResources } from './resources/index.js';
 import { registerAllPrompts } from './prompts/index.js';
+import { registerAllResources } from './resources/index.js';
+import { registerAllTools } from './tools/index.js';
 
 export function createServer(config: Config, logger: Logger): McpServer {
   const server = new McpServer({
