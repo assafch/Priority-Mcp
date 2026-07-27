@@ -20,9 +20,14 @@ export class PriorityClient {
   private readonly readOnly: boolean;
 
   constructor(config: Config, logger: Logger) {
-    // Pattern: {BASE_URL}/{ENV}/odata/Priority/tabula.ini/{COMPANY}
-    this.baseUrl = `${config.priorityApiUrl.replace(/\/+$/, '')}/${config.priorityEnvironment}/odata/Priority/tabula.ini/${config.priorityCompany}`;
-    this.authHeader = basicAuthHeader(config.priorityUsername, config.priorityPassword);
+    // Legacy pattern: {BASE_URL}/{ENV}/odata/Priority/tabula.ini/{COMPANY}
+    this.baseUrl =
+      config.priorityServiceRoot?.replace(/\/+$/, '') ??
+      `${config.priorityApiUrl}/${config.priorityEnvironment}/odata/Priority/tabula.ini/${config.priorityCompany}`;
+    this.authHeader = basicAuthHeader(
+      config.priorityUsername,
+      config.priorityAuthType === 'pat' ? 'PAT' : config.priorityPassword!,
+    );
     this.cache = new Cache(config.cacheTtlSeconds * 1000);
     this.rateLimiter = new RateLimiter(config.rateLimitPerMinute);
     this.logger = logger;
