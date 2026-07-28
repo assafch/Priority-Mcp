@@ -65,6 +65,21 @@ The server starts on stdio and is ready for your MCP client. That's it.
 
 ---
 
+### Custom Service Root and Priority PAT
+
+For Priority installations that provide a complete OData service root, use
+`PRIORITY_SERVICE_ROOT` instead of the legacy API URL, environment, and company settings.
+Priority Personal Access Tokens (PATs) use the token as the Basic-auth username and
+the literal `PAT` password.
+
+```bash
+export PRIORITY_SERVICE_ROOT="https://your-server/odata/Priority/your-tabula.ini/your-company"
+export PRIORITY_AUTH_TYPE="pat"
+export PRIORITY_USERNAME="your-personal-access-token"
+```
+
+---
+
 ## Setup Recipes
 
 ### Claude Desktop
@@ -132,11 +147,13 @@ All configuration is via environment variables. Validated on startup — the ser
 
 | Variable | Required | Default | Description |
 |:---------|:--------:|:-------:|:------------|
-| `PRIORITY_API_URL` | **Yes** | — | Priority OData endpoint URL |
-| `PRIORITY_ENVIRONMENT` | **Yes** | — | Environment name (e.g. `wlnd`, `demo`) |
-| `PRIORITY_COMPANY` | **Yes** | — | Company database (e.g. `demodata`, `usdemo`) |
+| `PRIORITY_SERVICE_ROOT` | One connection mode required | — | Complete Priority OData service root |
+| `PRIORITY_API_URL` | Legacy mode | — | Priority OData endpoint URL |
+| `PRIORITY_ENVIRONMENT` | Legacy mode | — | Environment name (e.g. `wlnd`, `demo`) |
+| `PRIORITY_COMPANY` | Legacy mode | — | Company database (e.g. `demodata`, `usdemo`) |
 | `PRIORITY_USERNAME` | **Yes** | — | API username |
-| `PRIORITY_PASSWORD` | **Yes** | — | API password |
+| `PRIORITY_PASSWORD` | Basic auth only | — | API password |
+| `PRIORITY_AUTH_TYPE` | No | `basic` | `basic` or `pat`; PAT uses `PRIORITY_USERNAME` as the token |
 | `PRIORITY_LANGUAGE` | No | `EN` | `EN` or `HE` — controls field name locale |
 | `PRIORITY_CUSTOM_PREFIX` | No | — | Prefix for custom entities (e.g. `ORGT_`) |
 | `PRIORITY_CUSTOM_ENTITIES` | No | — | Comma-separated custom entity names |
