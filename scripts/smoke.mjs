@@ -1,79 +1,90 @@
 #!/usr/bin/env node
-/**
- * Offline smoke test (NO live Priority calls).
- *
- * Spawns the built server over the real MCP stdio protocol with placeholder, READ-ONLY env,
- * lists the tools, asserts the 8 generic target tools are registered, and exercises the
- * credit-document write path in DRY-RUN mode (confirm=false) so the exact POST endpoint +
- * JSON body is printed without anything being sent to Priority.
- *
- * Run:  node scripts/smoke.mjs   (after `npm run build`)
- */
+/** Offline validation through the actual MCP stdio protocol. No .env or real credentials. */
+import assert from 'node:assert/strict';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-
 const transport = new StdioClientTransport({
-  command: 'node',
-  args: [resolve(root, 'dist/index.js')],
+  command: process.execPath,
+  args: ['--import', resolve(root, 'scripts/offline-network.mjs'), resolve(root, 'dist/index.js')],
   env: {
-    ...process.env,
-    // Placeholder, syntactically-valid config. No network is used by this test.
-    PRIORITY_SERVICE_ROOT: 'https://example.invalid/odata/Priority/tabula.ini/demo',
-    PRIORITY_USERNAME: 'placeholder-token',
-    PRIORITY_PASSWORD: 'PAT',
+    PRIORITY_SERVICE_ROOT: 'https://example.invalid/odata/Priority/offline/demo',
+    PRIORITY_PAT: 'offline-placeholder',
     PRIORITY_READ_ONLY: 'true',
+    MCP_TRANSPORT: 'stdio',
     LOG_LEVEL: 'error',
   },
 });
+const client = new Client({ name: 'offline-smoke-test', version: '0.0.0' });
+try {
+  await client.connect(transport);
+  const { tools } = await client.listTools();
+  const names = new Set(tools.map((tool) => tool.name));
+  for (const name of [
+    'priority_list_forms',
+    'priority_get_entity_metadata',
+    'priority_describe_form',
+    'priority_query',
+    'priority_get_record',
+    'priority_create_record',
+    'priority_update_record',
+    'priority_add_line',
+    'priority_create_invoice',
+    'priority_create_purchase_order',
+    'priority_search_suppliers',
+  ])
+    assert(names.has(name), `Missing MCP tool: ${name}`);
 
-const client = new Client({ name: 'smoke-test', version: '0.0.0' });
-await client.connect(transport);
+  function content(result) {
+    const block = result.content?.find((item) => item.type === 'text');
+    assert(block, 'Expected a structured tool response');
+    return JSON.parse(block.text);
+  }
+  // Explicitly synthetic generic form: this does not assert any tenant mapping.
+  const generic = await client.callTool({
+    name: 'priority_create_record',
+    arguments: {
+      form: 'OFFLINE_DEMO_FORM',
+      data: { NOTE: 'offline only' },
+      confirm: false,
+    },
+  });
+  assert.equal(generic.isError, undefined);
+  assert.equal(content(generic).dryRun, true);
+  assert.equal(content(generic).wouldSend.method, 'POST');
 
-const { tools } = await client.listTools();
-const names = tools.map((t) => t.name).sort();
-console.log(`\n✓ Server connected. ${tools.length} tools registered.`);
-
-const TARGET = [
-  'priority_list_forms',
-  'priority_get_entity_metadata',
-  'priority_describe_form',
-  'priority_query',
-  'priority_get_record',
-  'priority_create_record',
-  'priority_update_record',
-  'priority_add_line',
-];
-const missing = TARGET.filter((n) => !names.includes(n));
-console.log(
-  missing.length
-    ? `✗ MISSING generic tools: ${missing.join(', ')}`
-    : `✓ All 8 generic target tools present: ${TARGET.join(', ')}`,
-);
-
-// --- DRY-RUN: build a credit document (negative quantities) and preview it. ---
-// NOTE: 'CINVOICES' / the sub-form name are PLACEHOLDERS. The credit-invoice form name
-// varies by installation — in real use, discover it first with priority_list_forms /
-// priority_get_entity_metadata. We use confirm=false, so NOTHING is sent regardless.
-const creditDoc = {
-  form: 'CINVOICES',
-  data: {
-    CUSTNAME: 'C1001',
-    IVNUM: '12345',
-    AINVOICEITEMS_SUBFORM: [
-      { PARTNAME: 'P-100', TQUANT: -2 },
-      { PARTNAME: 'P-200', TQUANT: -1 },
+  for (const [name, arguments_] of [
+    [
+      'priority_create_invoice',
+      { customerId: 'offline-customer', items: [{ productId: 'offline-product', quantity: 1 }] },
     ],
-  },
-  confirm: false,
-};
-
-const res = await client.callTool({ name: 'priority_create_record', arguments: creditDoc });
-console.log('\n--- priority_create_record DRY-RUN (credit document) ---');
-console.log(res.content[0].text);
-
-await client.close();
-console.log('\n✓ Smoke test complete (no live API calls were made).');
+    [
+      'priority_create_purchase_order',
+      { supplierId: 'offline-supplier', items: [{ productId: 'offline-product', quantity: 1 }] },
+    ],
+  ]) {
+    const preview = await client.callTool({ name, arguments: arguments_ });
+    assert.equal(content(preview).dryRun, true, `${name} must default to preview`);
+    const blocked = await client.callTool({ name, arguments: { ...arguments_, dryRun: false } });
+    assert.equal(blocked.isError, true, `${name} must reject live writes`);
+    assert.match(content(blocked).error, /read-only/i);
+  }
+  const blocked = await client.callTool({
+    name: 'priority_create_record',
+    arguments: {
+      form: 'OFFLINE_DEMO_FORM',
+      data: {},
+      confirm: true,
+    },
+  });
+  assert.equal(blocked.isError, true);
+  assert.match(content(blocked).error, /read-only/i);
+  console.info(
+    `Offline MCP smoke passed: ${tools.length} tools registered; previews and write guards verified. No Priority connection used.`,
+  );
+} finally {
+  await client.close();
+}

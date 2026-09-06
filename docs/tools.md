@@ -9,7 +9,7 @@ tools don't fit. Discover exact form/field/sub-form names first, then read or wr
 
 | Tool | Type | Description |
 |------|------|-------------|
-| `priority_list_forms` | Read | List the forms (entity sets) this installation exposes to the API (OData service root) |
+| `priority_list_forms` | Read | List the forms (entity sets) on this installation — `prefix` / `contains` / `limit` |
 | `priority_get_entity_metadata` | Read | `GetMetadataFor(entity='X')` — field names, types, titles, mandatory flags (Priority 25.0+) |
 | `priority_describe_form` | Read | Universal fallback — infers fields from one sample row (`{form}?$top=1`) |
 | `priority_query` | Read | Structured query: `filter` / `select` / `expand` / `orderby` / `top` / `skip` |
@@ -100,7 +100,7 @@ put sub-form lines as an array under the sub-form's navigation-property name (co
 
 | Tool | Description |
 |------|-------------|
-| `priority_get_bank_balances` | Current balances for all bank accounts |
+| `priority_get_bank_balances` | Bank/cash balances from the GL (`ACCOUNTS` where `CASHNAME ne ''`) |
 | `priority_get_cash_position` | Net cash position across all accounts |
 | `priority_get_revenue_by_period` | Revenue breakdown by period |
 | `priority_get_top_customers` | Top customers by revenue for a period |
@@ -148,13 +148,13 @@ put sub-form lines as an array under the sub-form's navigation-property name (co
 |------|-------------|
 | `priority_list_attachments` | List file attachments for any entity |
 | `priority_get_attachment_url` | Get download URL for an attachment |
-| `priority_upload_attachment` | Upload/attach a file to an entity |
+| `priority_upload_attachment` | Attach a file to a document (POST to the auto-detected attachments sub-form, verified by re-read) |
 
 ## Meta / Schema (5 tools)
 
 | Tool | Description |
 |------|-------------|
-| `priority_list_entities` | List all available entities (tables/forms) |
+| `priority_list_entities` | Entity types from `$metadata` incl. sub-form types — `prefix` / `contains` / `limit` |
 | `priority_get_entity_schema` | Get field list and types for an entity |
 | `priority_list_companies` | List all companies in the environment |
 | `priority_get_current_user` | Get current API user info |

@@ -4,7 +4,8 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { parseCsdlEntity } from '../lib/csdl.js';
+import { parseCsdl } from '../lib/csdl.js';
+import { filterForms, listExposedForms } from '../lib/forms.js';
 import { checkWriteAllowed, dryRunRequest, textResult } from '../lib/write-guard.js';
 
 /**
@@ -17,21 +18,58 @@ export function registerGenericTools(server: McpServer, client: PriorityClient, 
 
   server.tool(
     'priority_list_forms',
-    `List the Priority forms (OData entity sets) exposed to the API on this installation.
+    `List the Priority forms (OData entity sets) on this installation, filtered at the source.
 
-Reads the OData service-root document, so it returns exactly what THIS installation makes
-available — a form only appears if it is ticked "Available for API" in Priority's
-"Limited Access/API Forms" screen. If a form you expect is missing, that is a Priority-side
-configuration issue, not something this server can change.
+This installation publishes ~1371 forms, so ALWAYS narrow with 'prefix' or 'contains' — an
+unfiltered list is truncated to fit the result budget and tells you nothing about the tail.
+To answer "is form X exposed?", call it as { contains: "X" } (or prefix) — that is the
+authoritative check, and it costs one call instead of probing X blind.
 
-Returns each form's name (use it as the 'form' argument elsewhere), kind, and relative url.
-Start here when you don't yet know which form holds the data you need.`,
-    {},
-    async () => {
+Matching is case-insensitive. Returns each form's name (use it as the 'form' argument
+elsewhere), kind, and relative url, plus how many forms matched vs. exist in total.
+
+CAVEAT: appearing here means the form is an entity set on this service; it does NOT guarantee
+the form's "Available for API" flag is on. A flag-off form still answers 400
+"לא ניתן להפעיל API למסך זה" (verified here for e.g. COMPANIES, PARTBAL, TODOLIST) — that is a
+Priority-side setting an admin must tick, not something this server can change.`,
+    {
+      prefix: z
+        .string()
+        .optional()
+        .describe('Only forms whose name starts with this (case-insensitive), e.g. "IMPF"'),
+      contains: z
+        .string()
+        .optional()
+        .describe('Only forms whose name contains this (case-insensitive), e.g. "BANK"'),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(500)
+        .default(100)
+        .describe('Max forms to return (default 100)'),
+    },
+    async (params) => {
       try {
-        const doc = await client.serviceRoot<{ value?: Array<Record<string, unknown>> }>();
-        const forms = doc.value ?? [];
-        return textResult({ count: forms.length, forms });
+        const forms = await listExposedForms(client);
+        const { matches, total, matched, truncated } = filterForms(forms, params);
+        return textResult({
+          forms: matches,
+          returned: matches.length,
+          matched,
+          totalFormsOnInstallation: total,
+          filter: { prefix: params.prefix ?? null, contains: params.contains ?? null },
+          ...(truncated
+            ? {
+                truncated: `${matched} forms matched; showing ${matches.length}. Raise 'limit' or narrow 'prefix'/'contains'.`,
+              }
+            : {}),
+          ...(matched === 0
+            ? {
+                note: 'No form matched. Try a shorter fragment via contains — Priority form names are UPPERCASE and often abbreviated (e.g. warehouse balances are WARHSBALREP, not WARHSBAL).',
+              }
+            : {}),
+        });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -57,18 +95,15 @@ priority_describe_form.`,
     async (params) => {
       try {
         const metadata = await client.getMetadataFor<unknown>(params.entity);
-        // Priority returns CSDL XML; parse the requested form into clean JSON
-        // (fields with type/title/mandatory, key, sub-forms). Fall back to raw on miss.
-        if (typeof metadata === 'string') {
-          const parsed = parseCsdlEntity(metadata, params.entity);
-          if (parsed) return textResult(parsed);
-          return textResult({
-            entity: params.entity,
-            note: 'Returned metadata could not be parsed into fields; raw CSDL follows (truncated).',
-            raw: metadata.slice(0, 4000),
-          });
-        }
-        return textResult(metadata);
+        // Priority returns CSDL — XML normally, JSON on some responses. Parse either into clean
+        // JSON (fields with type/title/mandatory, key, sub-forms); fall back to raw on a miss.
+        const parsed = parseCsdl(metadata, params.entity);
+        if (parsed) return textResult(parsed);
+        return textResult({
+          entity: params.entity,
+          note: 'Returned metadata could not be parsed into fields; raw CSDL follows (truncated).',
+          raw: typeof metadata === 'string' ? metadata.slice(0, 4000) : metadata,
+        });
       } catch (err) {
         throw toMcpError(err);
       }

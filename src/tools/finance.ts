@@ -20,17 +20,61 @@ const MAX_INVOICE_SCAN = 20000;
 export function registerFinanceTools(server: McpServer, client: PriorityClient) {
   server.tool(
     'priority_get_bank_balances',
-    'Get current balances for all bank accounts.',
+    `Get current balances for the bank / cash accounts.
+
+Source: the GL form ACCOUNTS, restricted to accounts flagged for cash flow (CASHNAME ne '') —
+that is Priority's own "bank account for cash flow" marker, so it yields the bank accounts, the
+cash register and the cheque clearing accounts. There is NO bank-account master form on this kind
+of installation (BANKACCOUNTS/CASHACC do not exist; BANKS/CASH/BANKPAGES exist but are usually not
+API-enabled), so the GL is the authoritative readable source.
+
+Balance fields, straight from Priority (no sign flipping — a GL credit balance is negative):
+  BALANCE1 = balance in the local currency, BALANCE2 = in the foreign currency,
+  BALANCE3 = in the account's own currency (CODE).`,
     {
-      top: z.number().int().min(1).max(100).default(50),
+      top: z.number().int().min(1).max(200).default(50),
+      includeInactive: z
+        .boolean()
+        .default(false)
+        .describe('include accounts marked INACTIVE / CLOSED'),
     },
     async (params) => {
       try {
-        const result = await client.list(
-          'BANKACCOUNTS',
-          new ODataBuilder().top(params.top).build(),
-        );
-        return textResult({ bankAccounts: result.value });
+        const qb = new ODataBuilder()
+          .filter("CASHNAME ne ''")
+          .select(
+            'ACCNAME',
+            'ACCDES',
+            'CASHNAME',
+            'CODE',
+            'BALANCE1',
+            'BALANCE2',
+            'BALANCE3',
+            'INACTIVE',
+            'CLOSED',
+          )
+          .orderBy('ACCNAME', 'asc')
+          .top(params.top);
+        const result = await client.list<Record<string, unknown>>('ACCOUNTS', qb.build());
+        const rows = params.includeInactive
+          ? result.value
+          : result.value.filter((a) => a.INACTIVE !== 'Y' && a.CLOSED !== 'Y');
+        return textResult({
+          source: { form: 'ACCOUNTS', filter: "CASHNAME ne ''" },
+          bankAccounts: rows.map((a) => ({
+            account: a.ACCNAME,
+            description: a.ACCDES,
+            cashFlowCode: a.CASHNAME,
+            currency: a.CODE,
+            balanceLocal: a.BALANCE1,
+            balanceForeign: a.BALANCE2,
+            balanceAccountCurrency: a.BALANCE3,
+            inactive: a.INACTIVE === 'Y',
+            closed: a.CLOSED === 'Y',
+          })),
+          count: rows.length,
+          note: 'GL balances, sign as Priority stores it (credit balances are negative). Includes cash-register and cheque accounts, not just banks — they are what Priority flags for cash flow.',
+        });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -39,18 +83,41 @@ export function registerFinanceTools(server: McpServer, client: PriorityClient) 
 
   server.tool(
     'priority_get_cash_position',
-    `Get current cash position across all bank accounts.
+    `Get the current cash position across the bank / cash accounts.
 
-Aggregates all bank account balances for a quick cash snapshot.`,
-    {},
-    async () => {
+Same source as priority_get_bank_balances (GL ACCOUNTS where CASHNAME ne ''), totalled per
+currency — accounts in different currencies are NOT summed into one number.`,
+    {
+      includeInactive: z.boolean().default(false),
+    },
+    async (params) => {
       try {
-        const result = await client.list<Record<string, unknown>>(
-          'BANKACCOUNTS',
-          new ODataBuilder().select('BANKACCNAME', 'BANKACCDES', 'BALANCE', 'CURRNCY').build(),
-        );
-        const total = result.value.reduce((sum, a) => sum + (Number(a.BALANCE) || 0), 0);
-        return textResult({ accounts: result.value, totalCash: total });
+        const qb = new ODataBuilder()
+          .filter("CASHNAME ne ''")
+          .select('ACCNAME', 'ACCDES', 'CODE', 'BALANCE1', 'BALANCE3', 'INACTIVE', 'CLOSED')
+          .top(200);
+        const result = await client.list<Record<string, unknown>>('ACCOUNTS', qb.build());
+        const rows = params.includeInactive
+          ? result.value
+          : result.value.filter((a) => a.INACTIVE !== 'Y' && a.CLOSED !== 'Y');
+        const byCurrency: Record<string, number> = {};
+        for (const a of rows) {
+          const code = String(a.CODE ?? '?');
+          byCurrency[code] = (byCurrency[code] ?? 0) + (Number(a.BALANCE3) || 0);
+        }
+        return textResult({
+          source: { form: 'ACCOUNTS', filter: "CASHNAME ne ''" },
+          accounts: rows.map((a) => ({
+            account: a.ACCNAME,
+            description: a.ACCDES,
+            currency: a.CODE,
+            balanceAccountCurrency: a.BALANCE3,
+            balanceLocal: a.BALANCE1,
+          })),
+          totalByCurrency: byCurrency,
+          totalLocalCurrency: rows.reduce((s, a) => s + (Number(a.BALANCE1) || 0), 0),
+          note: "Totals are GL balances with Priority's own sign convention (credit balances negative). totalLocalCurrency sums BALANCE1 across every account; totalByCurrency sums BALANCE3 within each currency.",
+        });
       } catch (err) {
         throw toMcpError(err);
       }

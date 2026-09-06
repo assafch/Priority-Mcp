@@ -8,13 +8,13 @@
 
 <p align="center">
   <strong>Connect AI assistants to Priority ERP</strong><br/>
-  80 tools (8 generic building blocks + 72 domain tools) &middot; 3 resources &middot; 5 workflow prompts
+  102 tools (8 generic building blocks + 94 domain tools) &middot; 3 resources &middot; 5 workflow prompts
 </p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License" /></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node 22+" /></a>
-  <a href="#tools-80"><img src="https://img.shields.io/badge/tools-80-blue.svg" alt="80 tools" /></a>
+  <a href="#tools-102"><img src="https://img.shields.io/badge/tools-102-blue.svg" alt="102 tools" /></a>
   <a href="#mcp-prompts-5"><img src="https://img.shields.io/badge/prompts-5-purple.svg" alt="5 prompts" /></a>
 </p>
 
@@ -48,6 +48,26 @@ Works with **Claude Desktop**, **Claude Code**, **Cursor**, **Windsurf**, and an
 ---
 
 ## Quick Start
+
+### Local Hebrew request portal (Instinct browser demo)
+
+The optional portal uses normal login/forms and a private SQLite database with dummy data.
+It prepares invoice-receipt, supplier and purchase-order requests, and shows saved results.
+It never connects to Priority/MCP, cannot approve or execute requests, and does not start or
+modify a Telegram bot. Node **22.13+** is required for the web portal.
+
+```bash
+npm ci
+npm run web:setup
+npm run web:start
+```
+
+Open **http://127.0.0.1:3210**. Setup asks for a site-only agent password in the terminal.
+Store it directly in the browser vault, never in chat. Alternatively, use
+`npm run web:setup -- --generate` for credentials in a private local file.
+The server binds to loopback only. [Hebrew runbook and test-company gaps](docs/web-demo.md).
+
+### MCP server
 
 ```bash
 # Set your Priority credentials. The service root is assembled as
@@ -187,7 +207,7 @@ sent as `X-App-Id` / `X-App-Key` headers when present.
 
 ---
 
-## Tools (100)
+## Tools (102)
 
 ### Generic / Building Blocks (8)
 
@@ -197,7 +217,7 @@ names with the discovery tools *before* querying or writing.
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|
-| `priority_list_forms` | Read | List the forms (entity sets) this installation exposes to the API |
+| `priority_list_forms` | Read | List the forms (entity sets) on this installation — filter with `prefix` / `contains` / `limit` (~1370 forms here) |
 | `priority_get_entity_metadata` | Read | Field names, types, titles & mandatory flags via `GetMetadataFor` (Priority 25.0+) |
 | `priority_describe_form` | Read | Universal fallback — infers fields from one sample row (`{form}?$top=1`) |
 | `priority_query` | Read | Structured query: `filter` / `select` / `expand` / `orderby` / `top` / `skip` |
@@ -289,11 +309,12 @@ Hebrew and spaces are fine inside quotes (values are percent-encoded automatical
 |:-----|:----:|:------------|
 | `priority_list_warehouses` | Read | All warehouses with location info |
 
-### Suppliers (3)
+### Suppliers (4)
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|
 | `priority_list_suppliers` | Read | List with search |
+| `priority_search_suppliers` | Read | Fuzzy search by name, number, phone, email (falls back when `contains()` is unsupported) |
 | `priority_get_supplier` | Read | Full supplier record |
 | `priority_get_supplier_balance` | Read | Open AP balance |
 
@@ -310,8 +331,8 @@ Hebrew and spaces are fine inside quotes (values are percent-encoded automatical
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|
-| `priority_get_bank_balances` | Read | All bank account balances |
-| `priority_get_cash_position` | Read | Total cash across accounts |
+| `priority_get_bank_balances` | Read | Bank/cash account balances from the GL (`ACCOUNTS` where `CASHNAME ne ''`) |
+| `priority_get_cash_position` | Read | Cash position totalled **per currency** (same GL source) |
 | `priority_get_revenue_by_period` | Read | Revenue breakdown by date range |
 | `priority_get_top_customers` | Read | Top customers by revenue |
 | `priority_get_top_products` | Read | Top products by revenue |
@@ -334,17 +355,17 @@ Hebrew and spaces are fine inside quotes (values are percent-encoded automatical
 | Tool | Type | Description |
 |:-----|:----:|:------------|
 | `priority_list_attachments` | Read | Attachments for any entity |
-| `priority_get_attachment_url` | Read | Download URL for a file |
-| `priority_upload_attachment` | Write | Attach file to an entity |
+| `priority_get_attachment_url` | Read | Stored path/metadata for one attachment (this API exposes no download URL) |
+| `priority_upload_attachment` | Write | Attach a file to a document — POSTs to the parent's attachments sub-form (auto-detected), then verifies by re-read |
 
 ### Meta / Admin (5)
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|
-| `priority_list_entities` | Read | Entity names from `$metadata` XML (prefer `priority_list_forms`) |
+| `priority_list_entities` | Read | Entity **types** from `$metadata` incl. sub-form types — filter with `prefix` / `contains` / `limit` |
 | `priority_get_entity_schema` | Read | Fields from `$metadata` XML (prefer `priority_get_entity_metadata`) |
-| `priority_list_companies` | Read | Companies in the environment |
-| `priority_get_current_user` | Read | Current auth context |
+| `priority_list_companies` | Read | Companies — reports the `COMPANIES` API-flag state when the form is blocked |
+| `priority_get_current_user` | Read | Priority identity (`GetTenantDetails`) + this server's config incl. `serverReadOnly` |
 | `priority_execute_odata_query` | Read | Raw OData escape hatch (prefer `priority_query`) |
 
 ### Import Files — תיקי יבוא (15)
@@ -361,14 +382,14 @@ against purchase orders, run pre-close diagnostics, and estimate landed cost. Se
 | `impfile_open` | Write | Open a new import file (POST IMPFILES) |
 | `impfile_update` | Write | Update file header / status (PATCH IMPFILES) |
 | `pinvoice_create` | Write | Record a supplier invoice — **goods** or **broker** mode (the `מע'מ` VAT-from-declaration line, cost parts, customs) |
-| `impfile_link_invoice` | Write | Retro-link an existing invoice to a file (composite-key PATCH; storno / relink guards) |
+| `impfile_link_invoice` | Write | Link an invoice to a file — `header` (PINVOICES), `line` (IMPFILEIV/IMPFILEIVS_SUBFORM per KLINE) or `final` (PIVDETAILS); storno / relink guards |
 | `impfile_manual_alloc` | Write | Add a manual cost/product allocation line (coded-not-observed on this company) |
 | `impfile_expected_costs` | Write | Record expected costs (feeds the expected/actual report) |
 | `po_match` | Read | Three-way match: ordered ↔ received ↔ invoiced, with per-line verdicts |
 | `po_close_lines` | Write | Close a purchase order / force-close the remaining balance (procedure-gated) |
-| `impfile_run_calc` | Read | Guidance + state for the loading calc (חישוב העמסה — a screen procedure) |
+| `impfile_run_calc_guide` | Read | Guidance + state for the loading calc (חישוב העמסה — a screen procedure); `mutates: false` |
 | `impfile_preflight` | Read | 8 pre-close checks → `{ ok, blocking, advisory, info }` |
-| `impfile_close` / `impfile_reopen` | Write | Close (only after a clean preflight) / reopen (procedure-gated) |
+| `impfile_close` / `impfile_reopen` | Write | Close (only after a clean preflight) / reopen — **re-reads the file afterwards** and reports whether it actually took |
 | `impfile_landed_cost` | Read | Value-weighted landed-cost estimate per SKU |
 
 ### Bonded Warehouse — מחסן ערובה (5)
@@ -379,10 +400,10 @@ procedures are Priority screen operations, not OData-writable).
 | Tool | Type | Description |
 |:-----|:----:|:------------|
 | `bonded_status` | Read | Bonded-warehouse config (bonded flag, holding vs costed location) |
-| `bonded_receipt_create` | Read | Guide receiving goods into the bonded warehouse + read-back |
-| `bonded_fill_detail` | Read | Guide filling the pallet/contents detail + read-back |
-| `bonded_release_create` | Read | Guide the release against a declaration (file must be closed) + read-back |
-| `bonded_line_costs` | Read | Guide registering per-line import costs (file must be closed) |
+| `bonded_receipt_guide` | Read | Guide receiving goods into the bonded warehouse + read-back (`mutates: false`) |
+| `bonded_fill_detail_guide` | Read | Guide filling the pallet/contents detail + read-back (`mutates: false`) |
+| `bonded_release_guide` | Read | Guide the release against a declaration (file must be closed) + read-back (`mutates: false`) |
+| `bonded_line_costs_guide` | Read | Guide registering per-line import costs (file must be closed) (`mutates: false`) |
 
 ---
 
