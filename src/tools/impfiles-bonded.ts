@@ -83,10 +83,11 @@ warehouse can be TYPE='D' without being bonded (e.g. the main warehouse) — BON
   );
 
   server.tool(
-    'bonded_receipt_create',
-    `קבלת סחורה למחסן ערובה (spec §Phase 5). Guide receiving goods into the bonded warehouse, and verify.
+    'bonded_receipt_guide',
+    `קבלת סחורה למחסן ערובה (spec §Phase 5). READ-ONLY GUIDE — does NOT receive anything.
 
-⚠️ SCREEN PROCEDURE (bonded ops are not OData-writable here). Receiving into the bonded holding
+⚠️ SCREEN PROCEDURE (bonded ops are not OData-writable here), so this tool only explains the step and
+reads back the file; results carry "mutates": false. Receiving into the bonded holding
 location keeps the goods OUT of inventory value until release (LBI2400656), and CLOSES the PO balance
 even before release. Returns the step guidance + a read-back of the file's goods content.`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },
@@ -94,6 +95,7 @@ even before release. Returns the step guidance + a read-back of the file's goods
       try {
         const file = await fileState(p.impfnum);
         return textResult({
+          mutates: false,
           impfnum: p.impfnum,
           step: 'bonded receipt (קבלת סחורה למחסן ערובה)',
           procedure: 'UI-only',
@@ -112,23 +114,23 @@ even before release. Returns the step guidance + a read-back of the file's goods
   );
 
   server.tool(
-    'bonded_fill_detail',
-    `מילוי פירוט למחסן ערובה / תכולה במחסני ערובה (spec §Phase 5). Guide filling the bonded pallet/contents
-detail, and verify.
+    'bonded_fill_detail_guide',
+    `מילוי פירוט למחסן ערובה / תכולה במחסני ערובה (spec §Phase 5). READ-ONLY GUIDE — fills in nothing.
 
-⚠️ SCREEN PROCEDURE. After the bonded receipt, fill "מילוי פירוט למחסן ערובה" and record the pallet
+⚠️ SCREEN PROCEDURE; results carry "mutates": false. After the bonded receipt, fill "מילוי פירוט למחסן ערובה" and record the pallet
 number in "תכולה במחסני ערובה". Returns the step guidance + a read-back of the file's goods content.`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },
     async (p) => {
       try {
         const file = await fileState(p.impfnum);
         return textResult({
+          mutates: false,
           impfnum: p.impfnum,
           step: 'fill bonded detail (מילוי פירוט למחסן ערובה)',
           procedure: 'UI-only',
           instructions: [
             'Fill "מילוי פירוט למחסן ערובה" and record the pallet number in "תכולה במחסני ערובה".',
-            'Next: close the file (impfile_close), then bonded_release_create to release against the declaration.',
+            'Next: close the file (impfile_close), then bonded_release_guide to release against the declaration.',
           ],
           readback: goodsReadback(file.IMPFILEITEMS_SUBFORM),
         });
@@ -139,11 +141,10 @@ number in "תכולה במחסני ערובה". Returns the step guidance + a re
   );
 
   server.tool(
-    'bonded_release_create',
-    `שחרור מהמחסן ערובה (קבלות סחורה ממחסן ערובה, spec §Phase 5). Guide releasing goods against a
-declaration, and verify.
+    'bonded_release_guide',
+    `שחרור מהמחסן ערובה (קבלות סחורה ממחסן ערובה, spec §Phase 5). READ-ONLY GUIDE — releases nothing.
 
-⚠️ SCREEN PROCEDURE. Release is done on the customs (מכס) part only, against a rishumon (declaration),
+⚠️ SCREEN PROCEDURE; results carry "mutates": false. Release is done on the customs (מכס) part only, against a rishumon (declaration),
 with released quantities (partial supported), the customs-broker invoice, the per-line import costs,
 and the additional-costs %. The FILE MUST BE CLOSED before release. Returns guidance + read-back
 (unreleased quantity remaining, and whether the file is closed).`,
@@ -152,6 +153,7 @@ and the additional-costs %. The FILE MUST BE CLOSED before release. Returns guid
       try {
         const file = await fileState(p.impfnum);
         return textResult({
+          mutates: false,
           impfnum: p.impfnum,
           step: 'bonded release (קבלות סחורה ממחסן ערובה)',
           procedure: 'UI-only',
@@ -173,11 +175,11 @@ and the additional-costs %. The FILE MUST BE CLOSED before release. Returns guid
   );
 
   server.tool(
-    'bonded_line_costs',
-    `רישום עלויות ייבוא לשורה (spec §Phase 5). Guide registering import costs to a released line — the
-FILE MUST BE CLOSED.
+    'bonded_line_costs_guide',
+    `רישום עלויות ייבוא לשורה (spec §Phase 5). READ-ONLY GUIDE — registers no costs. The FILE MUST BE
+CLOSED for the real (screen) operation.
 
-⚠️ SCREEN PROCEDURE. Checks the file is closed and returns the step guidance; per-line import costs
+⚠️ SCREEN PROCEDURE; results carry "mutates": false. Checks the file is closed and returns the step guidance; per-line import costs
 are registered only on a CLOSED file (LBI2400656). To add costs after a partial release: reopen →
 add → close.`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },
@@ -185,6 +187,7 @@ add → close.`,
       try {
         const file = await fileState(p.impfnum, false); // only the closed flag is needed here
         return textResult({
+          mutates: false,
           impfnum: p.impfnum,
           step: 'register import costs to line (רישום עלויות ייבוא לשורה)',
           procedure: 'UI-only',

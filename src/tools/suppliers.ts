@@ -51,6 +51,39 @@ export function registerSupplierTools(server: McpServer, client: PriorityClient)
   );
 
   server.tool(
+    'priority_search_suppliers',
+    `Fuzzy search for suppliers by name, number, phone, or email.
+
+Use when you don't know the exact SUPNAME. Matches across ${(SUPPLIERS?.searchFields ?? ['SUPDES', 'SUPNAME']).join(', ')}.
+Capability-aware exactly like priority_search_customers: it tries a native contains() filter and, on
+an installation that rejects OData string functions (this one does — HTTP 501), transparently falls
+back to scanning projected rows and matching server-side, returning only the matches. The result's
+'search.strategy' tells you which path ran.`,
+    {
+      query: z
+        .string()
+        .min(1)
+        .describe('Search term — matches name, supplier number, phone, email'),
+      top: z.number().int().min(1).max(100).default(20).describe('Max results'),
+    },
+    async (params) => {
+      try {
+        const { value, meta } = await searchForm(client, {
+          form: 'SUPPLIERS',
+          query: params.query,
+          fields: SUPPLIERS?.searchFields ?? ['SUPDES', 'SUPNAME'],
+          select: SUPPLIERS?.defaultSelect,
+          top: params.top,
+          orderby: 'SUPNAME asc',
+        });
+        return textResult({ results: value, count: value.length, search: meta });
+      } catch (err) {
+        throw toMcpError(err);
+      }
+    },
+  );
+
+  server.tool(
     'priority_get_supplier',
     'Get full supplier record by SUPNAME.',
     {

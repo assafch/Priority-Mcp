@@ -5,6 +5,7 @@ import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { dateFrom, dateTo } from '../lib/dates.js';
+import { probeForm } from '../lib/forms.js';
 import {
   type ImpfileSnapshot,
   VAT_DECLARATION_PART,
@@ -134,6 +135,225 @@ async function loadSnapshot(client: PriorityClient, impfnum: string): Promise<Im
   const qb = new ODataBuilder().expand(...IMPFILE_SUBFORMS.map((s) => s.subform));
   const record = await client.get<Row>('IMPFILES', impfnum, qb.build());
   return normalizeSnapshot(record) as unknown as ImpfileSnapshot;
+}
+
+const CLOSED_STATUS = 'סופי';
+const DRAFT_STATUS = 'טיוטא';
+
+/**
+ * Close/reopen may be a SCREEN PROCEDURE on this install, in which case the PATCH can return 200
+ * while changing nothing. So don't report success from the write's return value — re-read the file
+ * and report the state it is ACTUALLY in. The cached snapshot is invalidated first, otherwise the
+ * verification read could be served from the pre-write cache and confirm a change that never landed.
+ */
+async function verifyFileState(
+  client: PriorityClient,
+  impfnum: string,
+  intent: 'close' | 'reopen',
+  result: unknown,
+): Promise<Row> {
+  client.invalidateCache('IMPFILES');
+  const after = await client.get<Row>(
+    'IMPFILES',
+    impfnum,
+    new ODataBuilder().select('IMPFNUM', 'CLOSED', 'STATDES').build(),
+  );
+  const closed = String(after?.CLOSED ?? '') === 'Y';
+  const status = after?.STATDES ?? null;
+  const wanted = intent === 'close';
+  const took = wanted ? closed && status === CLOSED_STATUS : !closed && status !== CLOSED_STATUS;
+  return {
+    [intent === 'close' ? 'closed' : 'reopened']: took,
+    impfnum,
+    verifiedAfterWrite: { CLOSED: after?.CLOSED ?? null, STATDES: status },
+    expected: wanted
+      ? { CLOSED: 'Y', STATDES: CLOSED_STATUS }
+      : { CLOSED: '(empty)', STATDES: DRAFT_STATUS },
+    ...(took
+      ? {}
+      : {
+          warning: `The PATCH succeeded but the re-read shows CLOSED=${JSON.stringify(after?.CLOSED ?? null)}, STATDES=${JSON.stringify(status)} — the ${intent} did NOT take. On this install ${intent} is likely a screen procedure: run "${intent === 'close' ? 'סגירת תיק' : 'ביטול סגירת תיק'}" in the import-file screen, then re-check with impfile_get.`,
+        }),
+    result,
+  };
+}
+
+/** Params shared by the three impfile_link_invoice routes. */
+interface LinkParams {
+  invoiceNumber: string;
+  impfnum: string;
+  debit: string;
+  ivtype: string;
+  line?: number;
+  allowRelink: boolean;
+  dryRun: boolean;
+}
+
+/**
+ * route='line' — link ONE line of a supplier invoice to an import file.
+ *
+ * The per-line screen ("חשבוניות לתיקי יבוא ← פירוט") is the IMPFILEIV form's detail sub-form:
+ * IMPFILEIV(IVNUM,DEBIT,TYPE)/IMPFILEIVS_SUBFORM(KLINE=n), whose IMPFNUM column is the per-line
+ * file link (verified live 2026-07-29: the sub-form row is addressable and carries IMPFNUM).
+ * With no 'line' argument this LISTS the lines instead of guessing which one to touch.
+ */
+async function linkInvoiceLine(client: PriorityClient, config: Config, p: LinkParams) {
+  const keys = { IVNUM: p.invoiceNumber, DEBIT: p.debit, TYPE: p.ivtype };
+  const qb = new ODataBuilder()
+    .eq('IVNUM', sanitizeODataValue(p.invoiceNumber))
+    .eq('DEBIT', sanitizeODataValue(p.debit))
+    .eq('TYPE', sanitizeODataValue(p.ivtype))
+    .expand('IMPFILEIVS_SUBFORM')
+    .top(1);
+  const found = await client.list<Row>('IMPFILEIV', qb.build());
+  const inv = found.value[0];
+  if (!inv) {
+    return textResult({
+      error: `No IMPFILEIV row for IVNUM='${p.invoiceNumber}', DEBIT='${p.debit}', TYPE='${p.ivtype}'.`,
+      hint: "IMPFILEIV's key part is TYPE (not IVTYPE); a purchase invoice is TYPE='P'. Check the invoice exists with priority_query({ form: 'IMPFILEIV', filter: \"IVNUM eq '...'\" }).",
+    });
+  }
+  const lines = ((inv.IMPFILEIVS_SUBFORM as Row[]) ?? []).map((l) => ({
+    line: l.KLINE,
+    part: l.PARTNAME,
+    description: l.PDES,
+    quantity: l.TQUANT,
+    price: l.PRICE,
+    lineTotal: l.QPRICE,
+    currency: l.ICODE ?? l.CODE,
+    linkedTo: l.IMPFNUM ?? null,
+  }));
+
+  // No line chosen → show the menu rather than picking one.
+  if (p.line === undefined) {
+    return textResult({
+      route: 'line',
+      invoice: { IVNUM: inv.IVNUM, supplier: inv.SUPDES, headerImpfnum: inv.IMPFNUM ?? null },
+      lines,
+      note: 'Pass `line` (the KLINE) to link one of these lines to an import file. Header-level linking is route="header".',
+    });
+  }
+
+  const target = lines.find((l) => Number(l.line) === p.line);
+  if (!target) {
+    return textResult({
+      error: `Invoice ${p.invoiceNumber} has no line KLINE=${p.line}.`,
+      availableLines: lines.map((l) => l.line),
+    });
+  }
+  const currentLink = target.linkedTo ? String(target.linkedTo) : null;
+  if (currentLink && currentLink !== p.impfnum && !p.allowRelink) {
+    return textResult({
+      error: `Line ${p.line} of invoice ${p.invoiceNumber} is already linked to import file ${currentLink}. Pass allowRelink=true to move it to ${p.impfnum}.`,
+    });
+  }
+
+  const body = { IMPFNUM: p.impfnum };
+  const subKeys = { KLINE: p.line };
+  const gate = previewOrBlock(config, p.dryRun, 'LINK INVOICE LINE TO IMPORT FILE (PATCH)', {
+    method: 'PATCH',
+    endpoint: client.resolveSubformRowUrl('IMPFILEIV', keys, 'IMPFILEIVS_SUBFORM', subKeys),
+    keys,
+    subform: 'IMPFILEIVS_SUBFORM',
+    subKeys,
+    body,
+    line: target,
+    currentlyLinkedTo: currentLink,
+  });
+  if (gate) return gate;
+  const result = await client.updateSubformRow(
+    'IMPFILEIV',
+    keys,
+    'IMPFILEIVS_SUBFORM',
+    subKeys,
+    body,
+  );
+  client.invalidateCache('IMPFILES');
+  client.invalidateCache('IMPFILEIV');
+  // Verify rather than assume: re-read the row and report what actually stuck.
+  const after = await client.getSubformRow<Row>(
+    'IMPFILEIV',
+    keys,
+    'IMPFILEIVS_SUBFORM',
+    subKeys,
+    '?$select=KLINE,PARTNAME,IMPFNUM',
+  );
+  const linked = String(after?.IMPFNUM ?? '') === p.impfnum;
+  return textResult({
+    linked,
+    route: 'line',
+    invoice: p.invoiceNumber,
+    line: p.line,
+    impfnum: p.impfnum,
+    verifiedAfterWrite: { IMPFNUM: after?.IMPFNUM ?? null },
+    ...(linked
+      ? {}
+      : {
+          warning:
+            'The PATCH returned without an error but the re-read does not show the new IMPFNUM — Priority may route this change through the screen procedure. Check the line in "חשבוניות לתיקי יבוא ← פירוט".',
+        }),
+    result,
+  });
+}
+
+/**
+ * route='final' — the finalized-invoice detail screen "עדכון פרטים לחשבוניות ספק" is form
+ * PIVDETAILS (key IVNUM, DEBIT, TYPE; IMPFNUM = תיק יבוא). On this tenant PIVDETAILS exists but
+ * its "Available for API" flag is off, so the form is probed at RUNTIME: if an admin enables it the
+ * route starts working with no code change, and until then the caller is told exactly which form to
+ * enable instead of getting an opaque 400.
+ */
+async function linkInvoiceFinal(client: PriorityClient, config: Config, p: LinkParams) {
+  const probe = await probeForm(client, 'PIVDETAILS', '?$select=IVNUM,DEBIT,TYPE&$top=1');
+  if (probe.status !== 'ok') {
+    return unavailableHere(
+      `route='final' uses the "עדכון פרטים לחשבוניות ספק" screen = form PIVDETAILS (key IVNUM, DEBIT, TYPE). ${
+        probe.detail ?? `PIVDETAILS returned status '${probe.status}'.`
+      }`,
+      probe.status === 'api-flag-off'
+        ? "Ask a Priority admin to tick \"Available for API\" for PIVDETAILS; this route then works unchanged. Meanwhile use route='header' (PINVOICES.IMPFNUM) or route='line' (IMPFILEIV/IMPFILEIVS_SUBFORM), both of which are exposed here."
+        : "Use route='header' or route='line', both verified working on this installation.",
+    );
+  }
+
+  const keys = { IVNUM: p.invoiceNumber, DEBIT: p.debit, TYPE: p.ivtype };
+  const qb = new ODataBuilder()
+    .eq('IVNUM', sanitizeODataValue(p.invoiceNumber))
+    .eq('DEBIT', sanitizeODataValue(p.debit))
+    .eq('TYPE', sanitizeODataValue(p.ivtype))
+    .select('IVNUM', 'DEBIT', 'TYPE', 'SUPDES', 'IMPFNUM', 'STATDES', 'STORNOFLAG')
+    .top(1);
+  const found = await client.list<Row>('PIVDETAILS', qb.build());
+  const inv = found.value[0];
+  if (!inv) {
+    return textResult({
+      error: `No PIVDETAILS row for IVNUM='${p.invoiceNumber}', DEBIT='${p.debit}', TYPE='${p.ivtype}'.`,
+    });
+  }
+  if (inv.STORNOFLAG) {
+    return textResult({
+      error: `Invoice ${p.invoiceNumber} is cancelled (storno) — refusing to link it to a file.`,
+    });
+  }
+  const currentLink = inv.IMPFNUM ? String(inv.IMPFNUM) : null;
+  if (currentLink && currentLink !== p.impfnum && !p.allowRelink) {
+    return textResult({
+      error: `Invoice ${p.invoiceNumber} is already linked to import file ${currentLink}. Pass allowRelink=true to move it to ${p.impfnum}.`,
+    });
+  }
+  const body = { IMPFNUM: p.impfnum };
+  const gate = previewOrBlock(config, p.dryRun, 'LINK FINALIZED INVOICE TO IMPORT FILE (PATCH)', {
+    method: 'PATCH',
+    endpoint: client.resolveCompositeUrl('PIVDETAILS', keys),
+    keys,
+    body,
+    currentlyLinkedTo: currentLink,
+    invoiceStatus: inv.STATDES ?? null,
+  });
+  if (gate) return gate;
+  const result = await client.updateComposite('PIVDETAILS', keys, body);
+  client.invalidateCache('IMPFILES');
+  return textResult({ linked: true, route: 'final', invoice: p.invoiceNumber, result });
 }
 
 export function registerImpfileTools(server: McpServer, client: PriorityClient, config: Config) {
@@ -454,16 +674,25 @@ Links to the file via header IMPFNUM + OTYPE='P'; DEBIT='D'.
     'impfile_link_invoice',
     `קישור חשבונית קיימת לתיק יבוא. Link an EXISTING supplier invoice to an import file.
 
-Routes:
-  • header (default) — set IMPFNUM + OTYPE='P' on the invoice header (retroactive link). Resolves the
-    invoice's composite key (IVNUM,DEBIT,IVTYPE) then PATCHes it.
-  • line / final — the per-line ("חשבוניות לתיקי יבוא ← פירוט") and finalized-invoice
-    ("עדכון פרטים לחשבוניות ספק") routes use screens whose OData entity is not yet mapped on this
-    install; the tool returns guidance instead of guessing. To link at creation, use pinvoice_create.
+Routes (all three are implemented against real entities on this install):
+  • header (default) — PATCH the invoice header: IMPFNUM + OTYPE='P' on PINVOICES. Whole-invoice link.
+  • line — link ONE INVOICE LINE ("חשבוניות לתיקי יבוא ← פירוט"): PATCHes IMPFNUM on
+    IMPFILEIV(IVNUM,DEBIT,TYPE)/IMPFILEIVS_SUBFORM(KLINE=n). Use when a single forwarder invoice
+    covers several files and each cost line belongs to a different one. Omit 'line' to LIST the
+    invoice's lines (part, amount, current IMPFNUM) so you can pick the right KLINE first.
+  • final — the finalized-invoice screen "עדכון פרטים לחשבוניות ספק" = form PIVDETAILS
+    (key IVNUM,DEBIT,TYPE). Its "Available for API" flag is off on this tenant, so this route
+    probes the form at runtime and, if it is still blocked, names it and says who can enable it.
 
-Safety: PINVOICES has a COMPOSITE key, so the invoice is resolved by IVNUM + debit + ivtype (defaults
-D/P) to hit exactly the intended row. Refuses to link a cancelled (storno) invoice, and refuses to
-MOVE an invoice already linked to a different file unless allowRelink=true.
+Entity map (verified live 2026-07-29, company a051014):
+  PINVOICES  — supplier invoice header, key (IVNUM, DEBIT, IVTYPE)
+  IMPFILEIV  — invoice↔import-file view, key (IVNUM, DEBIT, TYPE), lines in IMPFILEIVS_SUBFORM (key KLINE)
+  IMPFILES/IMPFILEINV_SUBFORM — the same invoices as seen from the file
+  PIVDETAILS — finalized-invoice detail update, key (IVNUM, DEBIT, TYPE)  [API flag off here]
+
+Safety: these forms have COMPOSITE keys, so the invoice is resolved by IVNUM + debit + type to hit
+exactly the intended row. Refuses to link a cancelled (storno) invoice, and refuses to MOVE an
+invoice already linked to a different file unless allowRelink=true.
 
 ⚠️ WRITE. dryRun=true (default) previews the exact PATCH.`,
     {
@@ -471,7 +700,16 @@ MOVE an invoice already linked to a different file unless allowRelink=true.
       invoiceNumber: z.string().min(1).describe('IVNUM of the invoice to link'),
       impfnum: z.string().min(1).describe('IMPFNUM to link it to'),
       debit: z.string().default('D').describe('DEBIT key part (D=חיוב debit, C=זכוי credit)'),
-      ivtype: z.string().default('P').describe('IVTYPE key part (P=purchase invoice)'),
+      ivtype: z
+        .string()
+        .default('P')
+        .describe("IVTYPE/TYPE key part (P=purchase invoice) — 'TYPE' on IMPFILEIV/PIVDETAILS"),
+      line: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe("route='line': the KLINE of the invoice line to link (omit to list the lines)"),
       allowRelink: z
         .boolean()
         .default(false)
@@ -480,12 +718,8 @@ MOVE an invoice already linked to a different file unless allowRelink=true.
     },
     async (p) => {
       try {
-        if (p.route !== 'header') {
-          return unavailableHere(
-            `The '${p.route}' link route needs the "חשבוניות לתיקי יבוא"/"עדכון פרטים לחשבוניות ספק" screen, whose OData entity is not yet mapped on this install.`,
-            "Use route='header' to set IMPFNUM+OTYPE on the invoice, or pinvoice_create to link at creation time.",
-          );
-        }
+        if (p.route === 'line') return await linkInvoiceLine(client, config, p);
+        if (p.route === 'final') return await linkInvoiceFinal(client, config, p);
         // Resolve by the FULL composite key: an IVNUM can have both a debit and a credit/storno row,
         // so filtering on IVNUM alone could PATCH the wrong invoice.
         const qb = new ODataBuilder()
@@ -715,12 +949,13 @@ line key and is best done in the screen.
   );
 
   server.tool(
-    'impfile_run_calc',
-    `הרצת חישוב העמסה (spec §0/§3.7). Loading calculation for an import file.
+    'impfile_run_calc_guide',
+    `הרצת חישוב העמסה (spec §0/§3.7). READ-ONLY GUIDE — does NOT run the loading calculation.
 
-⚠️ The calc ("חישוב העמסה") is a Priority SCREEN PROCEDURE, not an OData action on this install. This
-tool returns the run instruction plus the file's current customs-estimate state; run the procedure in
-the import-file screen, then re-call impfile_landed_cost / impfile_preflight to verify.`,
+⚠️ The calc ("חישוב העמסה") is a Priority SCREEN PROCEDURE, not an OData action on this install, so
+no tool here can trigger it. This one reports the file's current customs-estimate state and the exact
+step to run in the screen; afterwards re-call impfile_landed_cost / impfile_preflight to verify.
+Results carry "mutates": false.`,
     {
       impfnum: z.string().min(1).describe('IMPFNUM'),
     },
@@ -731,6 +966,7 @@ the import-file screen, then re-call impfile_landed_cost / impfile_preflight to 
         const rec = await client.get<Row>('IMPFILES', p.impfnum, qb.build());
         const customs = (rec.IMPFILECUSTOMS_SUBFORM as Row[]) ?? [];
         return textResult({
+          mutates: false,
           impfnum: p.impfnum,
           action: 'RUN LOADING CALC (חישוב העמסה)',
           exposedAsApi: false,
@@ -749,8 +985,10 @@ the import-file screen, then re-call impfile_landed_cost / impfile_preflight to 
     `סגירת תיק יבוא. Close an import file — only after a clean preflight.
 
 Runs impfile_preflight first and refuses to close while blocking issues remain, unless override=true.
-⚠️ PROCEDURE-GATED: closing may be a screen procedure. Previews the PATCH (CLOSED='Y', STATDES='סופי');
-verify via a re-read on a real run.
+⚠️ PROCEDURE-GATED: closing may be a screen procedure rather than a field write. On a real run this
+tool RE-READS the file after the PATCH and reports whether CLOSED='Y' / STATDES='סופי' actually took —
+a silent no-op on a close is dangerous, so the result's 'closed' flag reflects the re-read, not the
+PATCH's success.
 
 ⚠️ WRITE. dryRun=true (default) previews the PATCH.`,
     {
@@ -778,7 +1016,7 @@ verify via a re-read on a real run.
         });
         if (gate) return gate;
         const result = await client.update('IMPFILES', p.impfnum, body);
-        return textResult({ closed: true, impfnum: p.impfnum, result });
+        return textResult(await verifyFileState(client, p.impfnum, 'close', result));
       } catch (err) {
         throw toMcpError(err);
       }
@@ -808,7 +1046,7 @@ the guided sequence: fix → run calc → close → re-run תמחיר if it alre
         });
         if (gate) return gate;
         const result = await client.update('IMPFILES', p.impfnum, body);
-        return textResult({ reopened: true, impfnum: p.impfnum, result });
+        return textResult(await verifyFileState(client, p.impfnum, 'reopen', result));
       } catch (err) {
         throw toMcpError(err);
       }

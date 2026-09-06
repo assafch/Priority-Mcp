@@ -48,54 +48,109 @@ console.log('--- 1) po_match PO25000003 (closed) ---');
 const m = await call('po_match', { poNumber: 'PO25000003' });
 check('po_match succeeds', m.ok && Array.isArray(m.data?.lines), m.error ?? '');
 check('PO reported closed', m.data?.closed === true);
-check('5 parts, all matched', m.data?.summary?.parts === 5 && m.data?.summary?.matched === 5 && m.data?.summary?.issues === 0, JSON.stringify(m.data?.summary));
-check('a matched line carries ordered/received/invoiced + price', m.data?.lines?.[0]?.verdict === 'matched' && m.data.lines[0].unitPrice > 0);
+check(
+  '5 parts, all matched',
+  m.data?.summary?.parts === 5 && m.data?.summary?.matched === 5 && m.data?.summary?.issues === 0,
+  JSON.stringify(m.data?.summary),
+);
+check(
+  'a matched line carries ordered/received/invoiced + price',
+  m.data?.lines?.[0]?.verdict === 'matched' && m.data.lines[0].unitPrice > 0,
+);
 
 // 2) po_match on an open PO → ordered-not-arrived.
 console.log('\n--- 2) po_match PO26000008 (open) ---');
 const mo = await call('po_match', { poNumber: 'PO26000008' });
 check('open PO not closed', mo.ok && mo.data?.closed === false, mo.error ?? '');
-check('open PO line is ordered-not-arrived', (mo.data?.lines ?? []).some((l) => l.verdict === 'ordered-not-arrived'));
+check(
+  'open PO line is ordered-not-arrived',
+  (mo.data?.lines ?? []).some((l) => l.verdict === 'ordered-not-arrived'),
+);
 
 // 3) impfile_preflight on a real closed file.
 console.log('\n--- 3) impfile_preflight IM25000009 ---');
 const pf = await call('impfile_preflight', { impfnum: 'IM25000009' });
 check('preflight succeeds', pf.ok && typeof pf.data?.ok === 'boolean', pf.error ?? '');
-check('preflight ok (no blocking) for a valid file', pf.data?.ok === true && (pf.data?.blocking ?? []).length === 0, JSON.stringify(pf.data?.blocking));
+check(
+  'preflight ok (no blocking) for a valid file',
+  pf.data?.ok === true && (pf.data?.blocking ?? []).length === 0,
+  JSON.stringify(pf.data?.blocking),
+);
 check('preflight reports duty-free info', (pf.data?.info ?? []).join(' ').includes('duty-free'));
-check('preflight has advisories (loading method / calc timing)', (pf.data?.advisory ?? []).length >= 2);
+check(
+  'preflight has advisories (loading method / calc timing)',
+  (pf.data?.advisory ?? []).length >= 2,
+);
 
 // 4) impfile_landed_cost — value-weighted estimate against real numbers.
 console.log('\n--- 4) impfile_landed_cost IM25000009 ---');
 const lc = await call('impfile_landed_cost', { impfnum: 'IM25000009' });
 check('landed_cost succeeds', lc.ok && Array.isArray(lc.data?.lines), lc.error ?? '');
 check('5 SKU lines', lc.data?.lines?.length === 5, `got ${lc.data?.lines?.length}`);
-check('ancillary = broker pre-VAT DISPRICE (5751.06)', approx(lc.data?.ancillaryCostsILS, 5751.06), `got ${lc.data?.ancillaryCostsILS}`);
-check('total goods value = Σ customs-estimate PRICE (53055.23)', approx(lc.data?.totalGoodsValueILS, 53055.23), `got ${lc.data?.totalGoodsValueILS}`);
+check(
+  'ancillary = broker pre-VAT DISPRICE (5751.06)',
+  approx(lc.data?.ancillaryCostsILS, 5751.06),
+  `got ${lc.data?.ancillaryCostsILS}`,
+);
+check(
+  'total goods value = Σ customs-estimate PRICE (53055.23)',
+  approx(lc.data?.totalGoodsValueILS, 53055.23),
+  `got ${lc.data?.totalGoodsValueILS}`,
+);
 const allocSum = (lc.data?.lines ?? []).reduce((s, l) => s + l.allocatedCostILS, 0);
-check('allocated costs sum ≈ ancillary (value-weighted)', approx(allocSum, 5751.06, 0.2), `Σalloc=${allocSum.toFixed(2)}`);
-check('each landed = goods + allocated', (lc.data?.lines ?? []).every((l) => approx(l.landedCostILS, l.goodsValueILS + l.allocatedCostILS, 0.02)));
+check(
+  'allocated costs sum ≈ ancillary (value-weighted)',
+  approx(allocSum, 5751.06, 0.2),
+  `Σalloc=${allocSum.toFixed(2)}`,
+);
+check(
+  'each landed = goods + allocated',
+  (lc.data?.lines ?? []).every((l) =>
+    approx(l.landedCostILS, l.goodsValueILS + l.allocatedCostILS, 0.02),
+  ),
+);
 
 // 5) impfile_run_calc — procedure guidance (not an OData action).
 console.log('\n--- 5) impfile_run_calc IM25000009 ---');
 const rc = await call('impfile_run_calc', { impfnum: 'IM25000009' });
-check('run_calc reports not-exposed + current state', rc.ok && rc.data?.exposedAsApi === false && rc.data?.currentCustomsEstimateLines === 5, rc.error ?? '');
+check(
+  'run_calc reports not-exposed + current state',
+  rc.ok && rc.data?.exposedAsApi === false && rc.data?.currentCustomsEstimateLines === 5,
+  rc.error ?? '',
+);
 
 // 6) po_close_lines — dry-run PATCH preview.
 console.log('\n--- 6) po_close_lines (dry-run) ---');
 const pcl = await call('po_close_lines', { poNumber: 'PO26000008' });
-check('po_close_lines previews CLOSEDBOOL PATCH', pcl.data?.dryRun === true && pcl.data?.wouldSend?.method === 'PATCH' && pcl.data?.wouldSend?.body?.CLOSEDBOOL === 'Y');
+check(
+  'po_close_lines previews CLOSEDBOOL PATCH',
+  pcl.data?.dryRun === true &&
+    pcl.data?.wouldSend?.method === 'PATCH' &&
+    pcl.data?.wouldSend?.body?.CLOSEDBOOL === 'Y',
+);
 
 // 7) impfile_close — runs preflight first, then previews the close PATCH.
 console.log('\n--- 7) impfile_close IM25000009 (dry-run) ---');
 const cl = await call('impfile_close', { impfnum: 'IM25000009' });
-check('close is a dry-run gated by a clean preflight', cl.data?.dryRun === true && cl.data?.wouldSend?.preflight?.ok === true, cl.error ?? '');
-check('close body sets CLOSED=Y + STATDES=סופי', cl.data?.wouldSend?.body?.CLOSED === 'Y' && cl.data?.wouldSend?.body?.STATDES === 'סופי');
+check(
+  'close is a dry-run gated by a clean preflight',
+  cl.data?.dryRun === true && cl.data?.wouldSend?.preflight?.ok === true,
+  cl.error ?? '',
+);
+check(
+  'close body sets CLOSED=Y + STATDES=סופי',
+  cl.data?.wouldSend?.body?.CLOSED === 'Y' && cl.data?.wouldSend?.body?.STATDES === 'סופי',
+);
 
 // 8) impfile_reopen — dry-run PATCH preview.
 console.log('\n--- 8) impfile_reopen IM25000009 (dry-run) ---');
 const ro = await call('impfile_reopen', { impfnum: 'IM25000009' });
-check('reopen previews CLOSED="" + STATDES=טיוטא', ro.data?.dryRun === true && ro.data?.wouldSend?.body?.CLOSED === '' && ro.data?.wouldSend?.body?.STATDES === 'טיוטא');
+check(
+  'reopen previews CLOSED="" + STATDES=טיוטא',
+  ro.data?.dryRun === true &&
+    ro.data?.wouldSend?.body?.CLOSED === '' &&
+    ro.data?.wouldSend?.body?.STATDES === 'טיוטא',
+);
 
 console.log(`\n${fail === 0 ? '✓ ALL PASS' : '✗ FAILURES'} — ${pass} passed, ${fail} failed`);
 await client.close();

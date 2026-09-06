@@ -7,7 +7,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — defects reported from a multi-day live import-file reconciliation (`PRIORITY_MCP_ISSUES.md`)
+
+Every item below was verified against the live ORGAT tenant (company `a051014`,
+`tabp008h.ini`, Priority 25.1) on 2026-07-29 — see `scripts/live-verify-issues.mjs`
+(50 checks, read-only) and `docs/tenant-forms-cheatsheet.md`.
+
+- **`priority_upload_attachment` re-enabled and implemented** (P0-1). It was hard-disabled;
+  it now POSTs to the parent document's attachments sub-form and re-reads it to confirm what
+  Priority stored. The sub-form name is **discovered at runtime** from `GetMetadataFor` rather
+  than hardcoded — which immediately paid off: `CUSTOMERS` spells it `CUSTEXTFILE_SUBFORM`,
+  `LOGPART` uses `PARTEXTFILE_SUBFORM`, and a form with none (e.g. `PARTSTATS`) is reported as
+  such along with the sub-forms it does have. `EXTFILENAME` is a **path** into Priority's
+  document store (the service declares no media/stream entity), so base64 `fileContent` is
+  refused with that explanation instead of creating a row pointing at nothing.
+  Proven by a real write round-trip on a draft import file (`scripts/live-verify-attachment.mjs`):
+  POST → Priority assigns `EXTFILENUM` → visible via the sub-form and `$expand` → DELETE `204`,
+  document left as found. Note for callers: Priority does **not** validate the path on insert
+  (a bogus path was stored with `FILESIZE: 0`), and the tool's description says so.
+- **`impfile_link_invoice` `line` and `final` routes implemented** (P0-2). They claimed the
+  entity was "not yet mapped"; both are mapped now — `line` PATCHes
+  `IMPFILEIV(IVNUM,DEBIT,TYPE)/IMPFILEIVS_SUBFORM(KLINE=n).IMPFNUM` (and lists the invoice's
+  lines when no `line` is given), `final` targets **`PIVDETAILS`** and, because that form's API
+  flag is off on this tenant, probes it at runtime and names it so an admin can enable it.
+- **`priority_get_bank_balances` / `priority_get_cash_position` retargeted** (P0-3). They queried
+  `BANKACCOUNTS`, which does not exist here (bare `Not found:`). `BANKS`/`CASH`/`BANKPAGES` exist
+  but are API-flag-off *and* hold no balances anyway. Balances now come from the GL:
+  `ACCOUNTS` filtered `CASHNAME ne ''`, with `BALANCE1/2/3` reported as Priority stores them
+  (no sign flipping) and cash totalled per currency.
+- **`priority_list_entities` no longer blows the result budget** (P1-1): it used a local
+  uncapped `textResult` and returned ~60k chars / 3k lines. It now routes through the shared
+  budget and takes `prefix` / `contains` / `limit`.
+- **`$metadata` is now parsed in both representations Priority sends** (found while verifying the
+  above). The identical request alternates between CSDL **XML** (~10.0MB, `application/xml`) and
+  CSDL **JSON** (~7.4MB, `application/json; odata.metadata=minimal`) — the JSON case arrived as a
+  parsed object, so the XML regex matched nothing and `priority_list_entities` cheerfully reported
+  **0 entity types** instead of ~3015. `src/lib/csdl.ts` handles either shape (`csdlEntityNames` /
+  `parseCsdl`), and every metadata consumer goes through it: `priority_list_entities`,
+  `priority_get_entity_schema` (which now also returns key/title/sub-forms),
+  `priority_get_entity_metadata`, the `priority://schema/{entity}` resource, and attachment
+  sub-form detection. A document that is empty or not CSDL is retried once and then raised as an
+  error instead of being returned as an empty list.
+- **`priority_list_forms` takes `prefix` / `contains` / `limit`** (P1-2). Previously it accepted
+  no parameters yet advised narrowing, and truncated at 171 of ~1370 forms. The service document
+  (~65s) is memoized in-process for 15 minutes and shared between concurrent callers.
+- **A 404 now explains itself** (P1-3). `Not found:` (empty) became three distinct diagnoses —
+  absent entity set / composite-key arity / bad key — plus an alias map for the names that get
+  tried by mistake (`GLPERIODS`→`ACCDATES`, `LOGCOUNTERS`→`LASTCOUNT`, `WARHSBAL`→`WARHSBALREP`,
+  `IMPFILEITEMS`→`IMPFILES/IMPFILEITEMS_SUBFORM`, `CASHACC`/`BANKACCOUNTS`→`ACCOUNTS`, …).
+  Errors now carry the form they were about (`PriorityError.resource`).
+- **The opaque `$select` XML error gets a hint** (P1-4): *"היתה בעיה ביצירת ה-XML…"* now explains
+  that a selected field is not projectable on that form and how to isolate it. A field can be
+  filterable but not selectable (verified: `PINVOICES.VATFLAG`), and Priority reports that
+  condition with either this message or `Could not find a property named` — both are handled.
+- **`readOnly` → `serverReadOnly` in `priority_get_current_user`** (P1-5), with the remediation
+  inline (`.env` **and restart the MCP host**), plus the real Priority identity from
+  `GetTenantDetails()` / `GetLoginName()`.
+- **Screen-procedure tools renamed and marked** (P2-1): `bonded_receipt_create` →
+  `bonded_receipt_guide`, `bonded_release_create` → `bonded_release_guide`,
+  `bonded_fill_detail` → `bonded_fill_detail_guide`, `bonded_line_costs` →
+  `bonded_line_costs_guide`, `impfile_run_calc` → `impfile_run_calc_guide`. All return
+  `"mutates": false`.
+- **`impfile_close` / `impfile_reopen` verify instead of assuming** (P2-2): after the PATCH they
+  re-read the file (cache invalidated first) and report whether `CLOSED='Y'` / `STATDES='סופי'`
+  actually took, warning explicitly when a procedure-gated write silently did nothing.
+
 ### Added
+
+- **`priority_search_suppliers`** (P2-3) — fuzzy supplier search with the same capability-aware
+  fallback as the customer/product searches (`contains()` is HTTP 501 on this installation).
+- **`docs/tenant-forms-cheatsheet.md`** (P2-4) — live-probed form map for this tenant: what is
+  exposed, what exists with its API flag off, what is absent and what to use instead, plus the
+  attachment sub-form names and the installation's quirks.
+- **`scripts/live-verify-issues.mjs`** — read-only live verification of every fix above, printing
+  the request/response evidence each check was decided on (`--json` to save it).
+- **`src/lib/forms.ts`** — form discovery + runtime capability probing (`ok` / `api-flag-off` /
+  `absent`), and attachment sub-form detection.
+- **`src/lib/form-aliases.ts`** — static map of wrong-name → right-form used by the error path
+  (no extra round-trip).
+- `PriorityClient.resolveSubformRowUrl` / `getSubformRow` / `updateSubformRow` — address one row
+  of a sub-form under a composite-keyed parent.
 
 - **`priority_product_sales_by_period`** (`src/tools/sales-report.ts`) — per-product sales
   quantity/value bucketed by half-month / month / week, in a single call. Works around this

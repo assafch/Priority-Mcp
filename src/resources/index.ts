@@ -2,7 +2,7 @@ import { type McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/serv
 import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { parseCsdlEntity } from '../lib/csdl.js';
+import { parseCsdl } from '../lib/csdl.js';
 
 export function registerAllResources(server: McpServer, client: PriorityClient, config: Config) {
   // Schema resource TEMPLATE — get schema for any entity. Must be registered via ResourceTemplate:
@@ -22,7 +22,8 @@ export function registerAllResources(server: McpServer, client: PriorityClient, 
         // GetMetadataFor(entity) returns just this form's CSDL (fast) — far cheaper than the full
         // $metadata document, which can take 60–90s and exceed the client timeout.
         const metadata = await client.getMetadataFor<unknown>(entity);
-        const parsed = typeof metadata === 'string' ? parseCsdlEntity(metadata, entity) : null;
+        // Parses CSDL in either representation (Priority answers XML or JSON here).
+        const parsed = parseCsdl(metadata, entity);
         const payload =
           parsed ??
           (typeof metadata === 'object' && metadata !== null

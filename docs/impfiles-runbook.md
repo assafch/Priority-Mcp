@@ -62,7 +62,7 @@ real write.
 4. **Retro-link any pre-existing invoice** (optional) — `impfile_link_invoice { invoiceNumber, impfnum, debit?, ivtype? }`. Refuses to link a storno or to move an already-linked invoice unless `allowRelink=true`.
 5. **Three-way match the PO** — `po_match { poNumber }`. Resolve any `qty-gap` / `ordered-not-arrived` / `received-not-invoiced` before closing.
 6. **Close supplied PO lines / balances** — `po_close_lines { poNumber }` (procedure-gated; verify via `po_match`).
-7. **Run the loading calc** — `impfile_run_calc { impfnum }` returns the instruction (the calc is a screen procedure). Run "חישוב העמסה" in Priority.
+7. **Run the loading calc** — `impfile_run_calc_guide { impfnum }` returns the instruction (the calc is a screen procedure). Run "חישוב העמסה" in Priority.
 8. **Preflight** — `impfile_preflight { impfnum }`. Fix everything in `blocking`; review `advisory`.
 9. **Close the file** — `impfile_close { impfnum }`. Refuses while preflight has blocking issues (override with `override=true` only deliberately).
 10. **Landed cost** — `impfile_landed_cost { impfnum }` for the value-weighted estimate; the authoritative figure is the product cost after תמחיר.
@@ -81,14 +81,14 @@ tools guide the sequence and verify state by read-back.
 
 1. `bonded_status { warehouse: "arov" }` — confirm the bonded config.
 2. Open file + link invoices (§2 steps 1–4).
-3. `bonded_receipt_create { impfnum }` — guide receiving goods into the bonded holding location (this
+3. `bonded_receipt_guide { impfnum }` — guide receiving goods into the bonded holding location (this
    closes the PO balance even before release). Read-back shows the goods content.
-4. `bonded_fill_detail { impfnum }` — guide filling the pallet/contents detail (תכולה במחסני ערובה).
+4. `bonded_fill_detail_guide { impfnum }` — guide filling the pallet/contents detail (תכולה במחסני ערובה).
 5. **Close the file** (`impfile_close`).
-6. `bonded_release_create { impfnum }` — guide the release against a rishumon (on the מכס part, partial
+6. `bonded_release_guide { impfnum }` — guide the release against a rishumon (on the מכס part, partial
    supported, with per-line import costs + additional-costs %). Read-back shows unreleased qty remaining
    and enforces that the file is closed.
-7. `bonded_line_costs { impfnum }` — guide registering per-line import costs (file must be closed).
+7. `bonded_line_costs_guide { impfnum }` — guide registering per-line import costs (file must be closed).
 
 Editing after a partial release: `impfile_reopen` → add → `impfile_close`.
 
@@ -118,7 +118,7 @@ criteria; verify with `impfile_get` / `po_match` between steps.
 
 | # | Scenario | Steps | Pass criteria |
 |---|---|---|---|
-| 1 | **Full cycle** | open → goods invoice → broker invoice (VAT on `מע'מ`, duty on the `C` part) → `po_match` → `po_close_lines` → `impfile_run_calc` → `impfile_preflight` → `impfile_close` → `impfile_reopen` → `impfile_close` | file closes clean; reopen then reclose succeeds; `impfile_get` shows both invoices |
+| 1 | **Full cycle** | open → goods invoice → broker invoice (VAT on `מע'מ`, duty on the `C` part) → `po_match` → `po_close_lines` → `impfile_run_calc_guide` → `impfile_preflight` → `impfile_close` → `impfile_reopen` → `impfile_close` | file closes clean; reopen then reclose succeeds; `impfile_get` shows both invoices |
 | 2 | **Cost invoice to two files (per-line link)** | broker invoice with lines split across two files | lines appear under `manualCostAllocations` / `extraProductLines`, NOT under `invoices`; `impfile_get` shows them |
 | 3 | **Partial supply** | PO partially received | `po_match` shows `qty-gap`; `po_close_lines` closes supplied, leaves the balance; file still closes |
 | 4 | **Storno on a linked invoice** | cancel a linked invoice | `impfile_preflight` flags it *blocking*; both correction routes (detach original / link credit) clear it |
@@ -126,8 +126,8 @@ criteria; verify with `impfile_get` / `po_match` between steps.
 | 6 | **Cost-only file** | file with only cost lines | `impfile_preflight` blocks with "only cost lines" |
 | 7 | **Weight loading, no weights** | weight-loaded part with `WEIGHT=0` | `impfile_preflight` advises "weights not populated / would split evenly" |
 
-**Bonded acceptance (§Phase 5):** open → link → `bonded_receipt_create` → `bonded_fill_detail` →
-`impfile_close` → `bonded_release_create` (partial) → `bonded_line_costs`; verify unreleased qty
+**Bonded acceptance (§Phase 5):** open → link → `bonded_receipt_guide` → `bonded_fill_detail_guide` →
+`impfile_close` → `bonded_release_guide` (partial) → `bonded_line_costs_guide`; verify unreleased qty
 decreases on release and that line-costs is refused while the file is open.
 
 ---

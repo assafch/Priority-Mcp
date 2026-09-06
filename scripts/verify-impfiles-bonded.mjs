@@ -50,20 +50,36 @@ check('arov reported as bonded', st.data?.isBonded === true);
 // The holding location is the one NOT in inventory value (COSTFLAG); the costed one holds released goods.
 const holding = (st.data?.locations ?? []).find((l) => l.inInventoryValue === false);
 const costed = (st.data?.locations ?? []).find((l) => l.inInventoryValue === true);
-check('has a bonded holding location (type D, not in inventory value)', holding && holding.bonded === true && holding.type === 'D');
+check(
+  'has a bonded holding location (type D, not in inventory value)',
+  holding && holding.bonded === true && holding.type === 'D',
+);
 check('holding location described as ערובה', String(holding?.description ?? '').includes('ערובה'));
 check('has a costed/released location (in inventory value)', Boolean(costed));
 // Control: a TYPE='D' warehouse that is NOT bonded must report isBonded=false (BONDED flag, not TYPE).
 const main = await call('bonded_status', { warehouse: 'Main' });
-check('Main (type-D, not bonded) → isBonded false', main.data?.found === true && main.data?.isBonded === false);
+check(
+  'Main (type-D, not bonded) → isBonded false',
+  main.data?.found === true && main.data?.isBonded === false,
+);
 const none = await call('bonded_status', { warehouse: '__no_such_wh__' });
-check('unknown warehouse → found false, isBonded false', none.data?.found === false && none.data?.isBonded === false);
+check(
+  'unknown warehouse → found false, isBonded false',
+  none.data?.found === false && none.data?.isBonded === false,
+);
 
 // 2) bonded_receipt_create — guidance + read-back on a closed file.
 console.log('\n--- 2) bonded_receipt_create IM25000009 ---');
 const rc = await call('bonded_receipt_create', { impfnum: 'IM25000009' });
-check('receipt guidance + warehouse read-back', rc.ok && rc.data?.warehouse === 'arov' && Array.isArray(rc.data?.instructions), rc.error ?? '');
-check('read-back: 5 goods lines, fully released (unreleased 0)', rc.data?.readback?.goodsLines === 5 && rc.data?.readback?.unreleasedQty === 0);
+check(
+  'receipt guidance + warehouse read-back',
+  rc.ok && rc.data?.warehouse === 'arov' && Array.isArray(rc.data?.instructions),
+  rc.error ?? '',
+);
+check(
+  'read-back: 5 goods lines, fully released (unreleased 0)',
+  rc.data?.readback?.goodsLines === 5 && rc.data?.readback?.unreleasedQty === 0,
+);
 
 // 3) bonded_fill_detail.
 console.log('\n--- 3) bonded_fill_detail IM25000009 ---');
@@ -73,16 +89,29 @@ check('fill_detail returns guidance + read-back', fd.ok && fd.data?.readback?.go
 // 4) bonded_release_create — closed file: no warning; open file: warning.
 console.log('\n--- 4) bonded_release_create (closed vs open) ---');
 const relClosed = await call('bonded_release_create', { impfnum: 'IM25000009' });
-check('release on closed file: fileClosed true, no warning', relClosed.data?.fileClosed === true && (relClosed.data?.warnings ?? []).length === 0);
+check(
+  'release on closed file: fileClosed true, no warning',
+  relClosed.data?.fileClosed === true && (relClosed.data?.warnings ?? []).length === 0,
+);
 const relOpen = await call('bonded_release_create', { impfnum: 'IM25000012' });
-check('release on OPEN draft: fileClosed false + warning', relOpen.data?.fileClosed === false && (relOpen.data?.warnings ?? []).join(' ').includes('close'));
+check(
+  'release on OPEN draft: fileClosed false + warning',
+  relOpen.data?.fileClosed === false && (relOpen.data?.warnings ?? []).join(' ').includes('close'),
+);
 
 // 5) bonded_line_costs — requires a closed file.
 console.log('\n--- 5) bonded_line_costs (closed vs open) ---');
 const lcClosed = await call('bonded_line_costs', { impfnum: 'IM25000009' });
-check('line_costs on closed file: no warning', lcClosed.data?.fileClosed === true && (lcClosed.data?.warnings ?? []).length === 0);
+check(
+  'line_costs on closed file: no warning',
+  lcClosed.data?.fileClosed === true && (lcClosed.data?.warnings ?? []).length === 0,
+);
 const lcOpen = await call('bonded_line_costs', { impfnum: 'IM25000012' });
-check('line_costs on OPEN file: warns file must be closed', lcOpen.data?.fileClosed === false && (lcOpen.data?.warnings ?? []).join(' ').toLowerCase().includes('closed'));
+check(
+  'line_costs on OPEN file: warns file must be closed',
+  lcOpen.data?.fileClosed === false &&
+    (lcOpen.data?.warnings ?? []).join(' ').toLowerCase().includes('closed'),
+);
 
 console.log(`\n${fail === 0 ? '✓ ALL PASS' : '✗ FAILURES'} — ${pass} passed, ${fail} failed`);
 await client.close();

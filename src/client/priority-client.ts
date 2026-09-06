@@ -137,16 +137,85 @@ export class PriorityClient {
     query?: string,
   ): string {
     this.assertSafeEntity(entity);
-    const predicate = Object.entries(keys)
+    let url = `${this.baseUrl}/${entity}(${PriorityClient.namedPredicate(keys)})`;
+    if (query) url += query;
+    return url;
+  }
+
+  /** Build a NAMED key predicate body: K1='v',K2=3 (strings quoted + encoded, numbers bare). */
+  private static namedPredicate(keys: Record<string, string | number>): string {
+    return Object.entries(keys)
       .map(([k, v]) =>
         typeof v === 'number'
           ? `${k}=${v}`
           : `${k}='${encodeURIComponent(String(v).replace(/'/g, "''"))}'`,
       )
       .join(',');
-    let url = `${this.baseUrl}/${entity}(${predicate})`;
+  }
+
+  /**
+   * Public: resolve ONE ROW of a sub-form under a (possibly composite-keyed) parent, e.g.
+   * IMPFILEIV(IVNUM='GI25000029',DEBIT='D',TYPE='P')/IMPFILEIVS_SUBFORM(KLINE=1).
+   * Verified live 2026-07-29: both the named form above and the positional `(1)` form resolve.
+   */
+  resolveSubformRowUrl(
+    entity: string,
+    keys: Record<string, string | number>,
+    subform: string,
+    subKeys: Record<string, string | number>,
+    query?: string,
+  ): string {
+    this.assertSafeEntity(entity);
+    this.assertSafeEntity(subform);
+    let url = `${this.baseUrl}/${entity}(${PriorityClient.namedPredicate(keys)})/${subform}(${PriorityClient.namedPredicate(subKeys)})`;
     if (query) url += query;
     return url;
+  }
+
+  /** GET one sub-form row (see resolveSubformRowUrl). */
+  async getSubformRow<T = unknown>(
+    entity: string,
+    keys: Record<string, string | number>,
+    subform: string,
+    subKeys: Record<string, string | number>,
+    query?: string,
+  ): Promise<T> {
+    return this.send<T>(
+      this.resolveSubformRowUrl(entity, keys, subform, subKeys, query),
+      'GET',
+      undefined,
+      true,
+    );
+  }
+
+  /** PATCH one sub-form row (see resolveSubformRowUrl). */
+  async updateSubformRow<T = unknown>(
+    entity: string,
+    keys: Record<string, string | number>,
+    subform: string,
+    subKeys: Record<string, string | number>,
+    body: unknown,
+  ): Promise<T> {
+    this.cache.invalidate(entity);
+    return this.send<T>(
+      this.resolveSubformRowUrl(entity, keys, subform, subKeys),
+      'PATCH',
+      body,
+      false,
+    );
+  }
+
+  /**
+   * Parse a request URL back into the form it targeted, so an error can name it (a bare
+   * "Not found:" is un-actionable). Returns undefined for the service root and for URLs that
+   * aren't under this company's base — never guesses.
+   */
+  private requestedResource(url: string): { form: string; keyed: boolean } | undefined {
+    if (!url.startsWith(this.baseUrl)) return undefined;
+    const rest = url.slice(this.baseUrl.length).replace(/^\//, '');
+    const form = rest.match(/^[^(/?]+/)?.[0];
+    if (!form || form.startsWith('$')) return undefined;
+    return { form, keyed: rest.slice(form.length).startsWith('(') };
   }
 
   /** Public: resolve the GetMetadataFor(entity='X') function URL (Priority 25.0+). */
@@ -213,6 +282,9 @@ export class PriorityClient {
               408,
               undefined,
               'The Priority endpoint did not respond in time; narrow the query (smaller $top, a shorter date window, or fewer $expand sub-forms).',
+              undefined,
+              undefined,
+              this.requestedResource(url),
             );
           }
           throw fetchErr; // genuine network error → normal retry path
@@ -229,7 +301,8 @@ export class PriorityClient {
           const parsed = parsePriorityErrorBody(parsedBody);
           const retryAfterMs =
             res.status === 429 ? parseRetryAfterMs(res.headers.get('retry-after')) : undefined;
-          // Surface the raw response body verbatim so the model can self-correct.
+          // Surface the raw response body verbatim so the model can self-correct, and carry the
+          // form this request targeted so the error can name it (404s come back with an empty body).
           throw new PriorityError(
             parsed.message,
             res.status,
@@ -237,6 +310,7 @@ export class PriorityClient {
             undefined,
             raw || undefined,
             retryAfterMs,
+            this.requestedResource(url),
           );
         }
 
@@ -259,6 +333,8 @@ export class PriorityClient {
               undefined,
               undefined,
               text,
+              undefined,
+              this.requestedResource(url),
             );
           }
         } else {
