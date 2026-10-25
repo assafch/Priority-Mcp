@@ -1,5 +1,7 @@
 # Faster and smarter MCP — verification record
 
+Follow-up: [live compatibility fixes and read-only verification](live-fixes-verification.md) completed on the same date. The record below describes the earlier offline stage.
+
 Implementation date: 2026-10-25. Baseline: `29f89590b567db66949564ac2c083d65dfc6f772` (0.2.0). Implementation branch: `codex/mcp-faster-smarter-20261025`. Status: **offline-complete / live-performance-unverified**. Source implementation: `3a1e7a9b8cb99c700ebb6e312dab4095c8ee370a`; measured with a clean Git tree. Independent review and the final offline verification passed.
 
 ## Scope and result boundary
