@@ -14,7 +14,7 @@
 
 import { PriorityError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
-import { parseCsdl } from './csdl.js';
+import { knowledgeFor } from './schema-service.js';
 
 export interface ExposedForm {
   name: string;
@@ -145,7 +145,8 @@ export async function probeForm(
   const probeCache = cacheFor(client).probes;
   const cacheKey = `${form}|${query}`;
   const cached = probeCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < PROBE_TTL_MS) return cached.probe;
+  if (cached && Date.now() - cached.at < (cached.probe.status === 'error' ? 30000 : PROBE_TTL_MS))
+    return cached.probe;
 
   let probe: FormProbe;
   try {
@@ -178,6 +179,23 @@ export async function probeForm(
       };
     }
   }
+  if (query === '?$top=1')
+    knowledgeFor(client).capabilities.put(
+      form,
+      'read',
+      probe.status === 'ok'
+        ? 'supported'
+        : probe.status === 'absent'
+          ? 'absent'
+          : probe.status === 'api-flag-off'
+            ? 'api-disabled'
+            : 'unknown',
+    );
+  while (probeCache.size >= 256) {
+    const key = probeCache.keys().next().value;
+    if (key === undefined) break;
+    probeCache.delete(key);
+  }
   probeCache.set(cacheKey, { at: Date.now(), probe });
   return probe;
 }
@@ -203,11 +221,7 @@ export async function probeCandidates(
  */
 export async function formSubforms(client: PriorityClient, form: string): Promise<string[] | null> {
   try {
-    // GetMetadataFor normally answers CSDL XML, but $metadata is known to flip to CSDL JSON on
-    // this server — parse either rather than assuming (a wrong assumption here would silently
-    // disable attachment support).
-    const metadata = await client.getMetadataFor<unknown>(form);
-    return parseCsdl(metadata, form)?.subforms ?? null;
+    return (await knowledgeFor(client).schemas.get(form, { purpose: 'read' })).schema.subforms;
   } catch {
     return null;
   }

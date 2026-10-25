@@ -12,6 +12,7 @@ import {
   sumInvoiceRevenue,
 } from '../lib/revenue.js';
 import { textResult, unavailableHere } from '../lib/write-guard.js';
+import { scanObservation, scanOperationOptions } from '../services/reports/observations.js';
 
 // Upper bound on how many invoices the revenue/top-customer scans will page through before
 // stopping. High enough to cover multi-year ranges; a hit is surfaced as an incomplete scan.
@@ -92,6 +93,7 @@ currency — accounts in different currencies are NOT summed into one number.`,
     },
     async (params) => {
       try {
+        const firstObservedAt = new Date().toISOString();
         const scan = await fetchAllPages<Record<string, unknown>>(
           (skip, top) =>
             client.list(
@@ -104,7 +106,7 @@ currency — accounts in different currencies are NOT summed into one number.`,
                 .skip(skip)
                 .build(),
             ),
-          { maxRows: 10000, fetchNext: (link) => client.listNext(link) },
+          { ...scanOperationOptions(), maxRows: 10000, fetchNext: (link) => client.listNext(link) },
         );
         const rows = params.includeInactive
           ? scan.rows
@@ -123,6 +125,7 @@ currency — accounts in different currencies are NOT summed into one number.`,
             balanceAccountCurrency: a.BALANCE3,
             balanceLocal: a.BALANCE1,
           })),
+          meta: scanObservation(scan, firstObservedAt),
           scan: { ...scan, rows: undefined, accountsScanned: scan.rows.length },
           totalByCurrency: byCurrency,
           totalLocalCurrency: rows.reduce((s, a) => s + (Number(a.BALANCE1) || 0), 0),
@@ -151,6 +154,7 @@ totalNetRevenue is pre-VAT (the P&L figure); totalWithVat is the VAT-inclusive p
         // Restrict to final invoices server-side so drafts ('טיוטא') and cancelled ('מבוטלת')
         // never count as revenue, and page through every match so the sum is complete.
         const rangeFilter = dateRangeFilter('IVDATE', params.dateFrom, params.dateTo);
+        const firstObservedAt = new Date().toISOString();
         const scan = await fetchAllPages<Record<string, unknown>>(
           (skip, top) => {
             const qb = new ODataBuilder()
@@ -165,7 +169,11 @@ totalNetRevenue is pre-VAT (the P&L figure); totalWithVat is the VAT-inclusive p
               .skip(skip);
             return client.list<Record<string, unknown>>('AINVOICES', qb.build());
           },
-          { maxRows: MAX_INVOICE_SCAN, fetchNext: (link) => client.listNext(link) },
+          {
+            ...scanOperationOptions(),
+            maxRows: MAX_INVOICE_SCAN,
+            fetchNext: (link) => client.listNext(link),
+          },
         );
         const totals = sumInvoiceRevenue(scan.rows);
         return textResult({
@@ -177,6 +185,7 @@ totalNetRevenue is pre-VAT (the P&L figure); totalWithVat is the VAT-inclusive p
           byMonth: groupRevenueByMonth(scan.rows),
           dateSemantics:
             'Date-only ranges use UTC day boundaries; monthly buckets preserve Priority IVDATE calendar dates. Explicit offsets retain their instant meaning.',
+          meta: scanObservation(scan, firstObservedAt),
           scan: { ...scan, rows: undefined, invoicesScanned: scan.rows.length },
           ...(!scan.complete
             ? {
@@ -208,6 +217,7 @@ matching invoices in the range — not just the first page — so the ranking is
         // code took an unordered first-1000-row slice, so any busy year ranked on an arbitrary
         // subset. Final-only (STATDES) keeps drafts/cancelled out of the revenue.
         const rangeFilter = dateRangeFilter('IVDATE', params.dateFrom, params.dateTo);
+        const firstObservedAt = new Date().toISOString();
         const scan = await fetchAllPages<Record<string, unknown>>(
           (skip, top) => {
             const qb = new ODataBuilder()
@@ -222,12 +232,17 @@ matching invoices in the range — not just the first page — so the ranking is
               .skip(skip);
             return client.list<Record<string, unknown>>('AINVOICES', qb.build());
           },
-          { maxRows: MAX_INVOICE_SCAN, fetchNext: (link) => client.listNext(link) },
+          {
+            ...scanOperationOptions(),
+            maxRows: MAX_INVOICE_SCAN,
+            fetchNext: (link) => client.listNext(link),
+          },
         );
 
         return textResult({
           topCustomers: rankCustomersByRevenue(scan.rows, params.top),
           period: { from: params.dateFrom, to: params.dateTo },
+          meta: scanObservation(scan, firstObservedAt),
           scan: { ...scan, rows: undefined, invoicesScanned: scan.rows.length },
           ...(!scan.complete
             ? {

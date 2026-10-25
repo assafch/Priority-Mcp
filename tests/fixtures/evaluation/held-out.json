@@ -1,0 +1,1479 @@
+{
+  "schemaVersion": 1,
+  "split": "held-out",
+  "cases": [
+    {
+      "id": "entity-027",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Find supplier 0042 exactly",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "supplier",
+        "query": "0042",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "SUPPLIERS": [
+            {
+              "SUPNAME": "0042",
+              "SUPDES": "Stone Harbor"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "resolved",
+        "ids": [
+          "0042"
+        ]
+      }
+    },
+    {
+      "id": "entity-028",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Return niqqud variant candidates",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "explicit-id-selection",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": "רִימוֹן  שיווק",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "R1",
+              "CUSTDES": "רימון שיווק"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "ambiguous",
+        "ids": [
+          "R1"
+        ]
+      }
+    },
+    {
+      "id": "entity-029",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Find product by exact fresh barcode",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "product",
+        "query": "930001",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "LOGPART": [
+            {
+              "PARTNAME": "SKU-41",
+              "PARTDES": "Cotton Pad",
+              "BARCODE": "930001"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "resolved",
+        "ids": [
+          "SKU-41"
+        ]
+      }
+    },
+    {
+      "id": "entity-030",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "A duplicate held-out supplier alias remains ambiguous",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "explicit-id-selection",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "supplier",
+        "query": "ספק נבחר",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "SUPPLIERS": [
+            {
+              "SUPNAME": "U1",
+              "SUPDES": "Urban Goods"
+            },
+            {
+              "SUPNAME": "U2",
+              "SUPDES": "Urban Trading"
+            }
+          ]
+        },
+        "aliases": [
+          {
+            "alias": "ספק נבחר",
+            "id": "U1"
+          },
+          {
+            "alias": "ספק נבחר",
+            "id": "U2"
+          }
+        ]
+      },
+      "expected": {
+        "status": "ambiguous",
+        "ids": [
+          "U1",
+          "U2"
+        ]
+      }
+    },
+    {
+      "id": "entity-031",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "A minor English typo returns candidates",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "explicit-id-selection",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": "Copper Hils",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "CH1",
+              "CUSTDES": "Copper Hills"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "ambiguous",
+        "ids": [
+          "CH1"
+        ]
+      }
+    },
+    {
+      "id": "entity-032",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "A missing held-out exact code cannot be invented",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "product",
+        "query": "NO-777",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "LOGPART": [
+            {
+              "PARTNAME": "P77",
+              "PARTDES": "Metal Clips"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "not-found-in-scan",
+        "ids": []
+      }
+    },
+    {
+      "id": "entity-033",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Return both branch companies for selection",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "explicit-id-selection",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": "שחר אספקה",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "SH1",
+              "CUSTDES": "שחר אספקה"
+            },
+            {
+              "CUSTNAME": "SH2",
+              "CUSTDES": "שחר אספקה דרום"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "ambiguous",
+        "ids": [
+          "SH1",
+          "SH2"
+        ]
+      }
+    },
+    {
+      "id": "entity-034",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Unique reviewed held-out SKU alias resolves",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "product",
+        "query": "מטלית כחולה",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "LOGPART": [
+            {
+              "PARTNAME": "CL-01",
+              "PARTDES": "Blue Microfiber"
+            }
+          ]
+        },
+        "aliases": [
+          {
+            "alias": "מטלית כחולה",
+            "id": "CL-01"
+          }
+        ]
+      },
+      "expected": {
+        "status": "resolved",
+        "ids": [
+          "CL-01"
+        ]
+      }
+    },
+    {
+      "id": "entity-035",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Preserve slash in exact identifier",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": "A/004",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "A/004",
+              "CUSTDES": "Harbor Shop"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "resolved",
+        "ids": [
+          "A/004"
+        ]
+      }
+    },
+    {
+      "id": "entity-036",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Whitespace in an identifier is never silently trimmed",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": " A4 ",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "A4",
+              "CUSTDES": "Harbor Shop"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "not-found-in-scan",
+        "ids": []
+      }
+    },
+    {
+      "id": "entity-037",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "An uppercase held-out name remains a candidate",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "explicit-id-selection",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": "ORANGE GROVE",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "OG1",
+              "CUSTDES": "Orange Grove"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "ambiguous",
+        "ids": [
+          "OG1"
+        ]
+      }
+    },
+    {
+      "id": "entity-038",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "A withheld mapping cannot leak another scope",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": "quiet alias",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "Q1",
+              "CUSTDES": "Silver Meadow"
+            }
+          ]
+        },
+        "aliases": [
+          {
+            "alias": "quiet alias",
+            "id": "Q1",
+            "scope": "other-scope"
+          }
+        ]
+      },
+      "expected": {
+        "status": "not-found-in-scan",
+        "ids": []
+      }
+    },
+    {
+      "id": "entity-039",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "Two similarly named products remain two SKUs",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "explicit-id-selection",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "product",
+        "query": "Soft Cloth",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "LOGPART": [
+            {
+              "PARTNAME": "P-A",
+              "PARTDES": "Soft Cloth"
+            },
+            {
+              "PARTNAME": "P-B",
+              "PARTDES": "Soft Cloth Large"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "status": "ambiguous",
+        "ids": [
+          "P-A",
+          "P-B"
+        ]
+      }
+    },
+    {
+      "id": "entity-040",
+      "split": "held-out",
+      "category": "entity",
+      "engine": "resolver",
+      "prompt": "An unavailable barcode verifier returns no cached names",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "explicit-id-selection",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "kind": "product",
+        "query": "930009",
+        "limit": 3
+      },
+      "backend": {
+        "forms": {
+          "LOGPART": [
+            {
+              "PARTNAME": "P-T",
+              "PARTDES": "Travel Brush",
+              "BARCODE": "930009"
+            }
+          ]
+        },
+        "timeoutIds": [
+          "P-T"
+        ]
+      },
+      "expected": {
+        "status": "ambiguous",
+        "ids": []
+      }
+    },
+    {
+      "id": "query-021",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out invoice projection retains every key",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "IVDATE",
+          "TOTAL"
+        ],
+        "filters": [],
+        "top": 25
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "select": "IVDATE,TOTAL,IVNUM,DEBIT,IVTYPE",
+        "top": 25,
+        "costClass": "scan"
+      }
+    },
+    {
+      "id": "query-022",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out leap day includes its final fraction",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [],
+        "dates": {
+          "to": "2024-02-29"
+        }
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "filter": "IVDATE lt 2024-03-01T00:00:00Z"
+      }
+    },
+    {
+      "id": "query-023",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out Hebrew filter preserves leading zeros",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [
+          {
+            "field": "DES",
+            "op": "ne",
+            "value": "0004"
+          }
+        ]
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "filter": "DES ne '0004'"
+      }
+    },
+    {
+      "id": "query-024",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out 101-row preview is structurally heavy",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [],
+        "top": 101
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "costClass": "heavy",
+        "top": 101
+      }
+    },
+    {
+      "id": "query-025",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out third expansion is rejected",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [],
+        "expand": [
+          "A",
+          "B",
+          "C"
+        ]
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "errorIncludes": "Expand",
+        "metadataCalls": 0
+      }
+    },
+    {
+      "id": "query-026",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out negative row bound is rejected",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [],
+        "top": -1
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "errorIncludes": "500",
+        "metadataCalls": 0
+      }
+    },
+    {
+      "id": "query-027",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out missing form is not auto-discovered",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": []
+      },
+      "backend": {
+        "metadataError": 404
+      },
+      "expected": {
+        "dataCalls": 0,
+        "errorIncludes": "Missing",
+        "metadataCalls": 1
+      }
+    },
+    {
+      "id": "query-028",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out read capability denial prevents metadata request",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": []
+      },
+      "backend": {
+        "readDenied": true
+      },
+      "expected": {
+        "dataCalls": 0,
+        "errorIncludes": "capability",
+        "metadataCalls": 0
+      }
+    },
+    {
+      "id": "query-029",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out invalid scalar cannot be repaired by guessing",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [
+          {
+            "field": "DES",
+            "op": "eq",
+            "value": 7
+          }
+        ]
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "errorIncludes": "string"
+      }
+    },
+    {
+      "id": "query-030",
+      "split": "held-out",
+      "category": "query",
+      "engine": "query",
+      "prompt": "Held-out name contains unknown support remains a preview",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [
+          {
+            "field": "DES",
+            "op": "contains",
+            "value": "רימון"
+          }
+        ]
+      },
+      "backend": {},
+      "expected": {
+        "dataCalls": 0,
+        "filter": "contains(DES,'רימון')",
+        "warningIncludes": "support is unknown"
+      }
+    },
+    {
+      "id": "workflow-report-021",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "sales",
+      "prompt": "Held-out negative net return remains negative",
+      "authorizedTools": [
+        "priority_product_sales_by_period"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "products": [
+          "P"
+        ],
+        "fromDate": "2026-01-01",
+        "toDate": "2026-01-31",
+        "bucket": "month",
+        "metric": "quantity",
+        "includeDeliveryNotes": false,
+        "windowDays": 31,
+        "deadlineMs": 20000
+      },
+      "backend": {
+        "forms": {
+          "AINVOICES": [
+            {
+              "IVNUM": "CREDIT",
+              "DEBIT": "C",
+              "IVTYPE": "A",
+              "IVDATE": "2026-01-01T12:00:00Z",
+              "STATDES": "סופית",
+              "AINVOICEITEMS_SUBFORM": [
+                {
+                  "PARTNAME": "P",
+                  "TQUANT": -8,
+                  "QPRICE": 0
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "grandTotal": -8
+      }
+    },
+    {
+      "id": "workflow-report-022",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "sales",
+      "prompt": "Held-out backdated observation belongs to its invoice date",
+      "authorizedTools": [
+        "priority_product_sales_by_period"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "products": [
+          "P"
+        ],
+        "fromDate": "2026-01-01",
+        "toDate": "2026-01-31",
+        "bucket": "month",
+        "metric": "quantity",
+        "includeDeliveryNotes": false,
+        "windowDays": 31,
+        "deadlineMs": 20000
+      },
+      "backend": {
+        "forms": {
+          "AINVOICES": [
+            {
+              "IVNUM": "BACK",
+              "DEBIT": "D",
+              "IVTYPE": "A",
+              "IVDATE": "2026-01-05T00:00:00Z",
+              "STATDES": "סופית",
+              "AINVOICEITEMS_SUBFORM": [
+                {
+                  "PARTNAME": "P",
+                  "TQUANT": 11,
+                  "QPRICE": 0
+                }
+              ]
+            }
+          ]
+        },
+        "backdatedObservation": true
+      },
+      "expected": {
+        "grandTotal": 11,
+        "snapshotConsistent": false
+      }
+    },
+    {
+      "id": "workflow-report-023",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "cash",
+      "prompt": "Held-out multi-currency cash never adds FX balances",
+      "authorizedTools": [
+        "priority_get_cash_position"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "includeInactive": false
+      },
+      "backend": {
+        "forms": {
+          "ACCOUNTS": [
+            {
+              "ACCNAME": "A",
+              "CODE": "USD",
+              "BALANCE1": 36,
+              "BALANCE3": 10
+            },
+            {
+              "ACCNAME": "B",
+              "CODE": "EUR",
+              "BALANCE1": 40,
+              "BALANCE3": 10
+            }
+          ]
+        }
+      },
+      "expected": {
+        "totalByCurrency": {
+          "USD": 10,
+          "EUR": 10
+        },
+        "totalLocalCurrency": 76
+      }
+    },
+    {
+      "id": "workflow-report-024",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "customer",
+      "prompt": "Held-out blocked ledger component is explicit",
+      "authorizedTools": [
+        "priority_customer_snapshot"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "customerId": "C4",
+        "sections": [
+          "balance"
+        ]
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "C4",
+              "CUSTDES": "Four"
+            }
+          ]
+        },
+        "blockedTools": [
+          "priority_get_customer_balance"
+        ]
+      },
+      "expected": {
+        "complete": false,
+        "sectionStatuses": {
+          "balance": "blocked"
+        },
+        "dataCalls": 1
+      }
+    },
+    {
+      "id": "workflow-report-025",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "customer",
+      "prompt": "Held-out invoice currencies stay on individual source rows",
+      "authorizedTools": [
+        "priority_customer_snapshot"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "customerId": "C5",
+        "sections": [
+          "invoices"
+        ]
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "C5",
+              "CUSTDES": "Five"
+            }
+          ],
+          "AINVOICES": [
+            {
+              "IVNUM": "A",
+              "DEBIT": "D",
+              "IVTYPE": "A",
+              "CUSTNAME": "C5",
+              "CODE": "USD",
+              "TOTPRICE": 100
+            },
+            {
+              "IVNUM": "B",
+              "DEBIT": "D",
+              "IVTYPE": "A",
+              "CUSTNAME": "C5",
+              "CODE": "EUR",
+              "TOTPRICE": 200
+            }
+          ]
+        }
+      },
+      "expected": {
+        "complete": false,
+        "invoiceCurrencies": [
+          "EUR",
+          "USD"
+        ]
+      }
+    },
+    {
+      "id": "workflow-report-026",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "customer",
+      "prompt": "Held-out denied identity prevents dependent financial reads",
+      "authorizedTools": [
+        "priority_customer_snapshot"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "customerId": "C6"
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "C6",
+              "CUSTDES": "Six"
+            }
+          ]
+        },
+        "deniedIds": [
+          "C6"
+        ]
+      },
+      "expected": {
+        "complete": false,
+        "sectionStatuses": {
+          "identity": "failed"
+        },
+        "dataCalls": 1
+      }
+    },
+    {
+      "id": "workflow-report-027",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "order",
+      "prompt": "Held-out empty shipment list still proves no carrier delivery",
+      "authorizedTools": [
+        "priority_order_diagnosis"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "orderNumber": "O3"
+      },
+      "backend": {
+        "forms": {
+          "ORDERS": [
+            {
+              "ORDNAME": "O3",
+              "SHIPMENTS_SUBFORM": []
+            }
+          ]
+        }
+      },
+      "expected": {
+        "complete": true,
+        "deliveryVerified": false
+      }
+    },
+    {
+      "id": "workflow-report-028",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "order",
+      "prompt": "Held-out shipment continuation prevents full coverage claim",
+      "authorizedTools": [
+        "priority_order_diagnosis"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "orderNumber": "O4"
+      },
+      "backend": {
+        "forms": {
+          "ORDERS": [
+            {
+              "ORDNAME": "O4",
+              "SHIPMENTS_SUBFORM": [],
+              "SHIPMENTS_SUBFORM@odata.nextLink": "ORDERS/O4/more"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "complete": false,
+        "deliveryVerified": false
+      }
+    },
+    {
+      "id": "workflow-report-029",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "import",
+      "prompt": "Held-out omitted goods source suppresses financial calculations",
+      "authorizedTools": [
+        "priority_import_diagnosis"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "impfnum": "F2"
+      },
+      "backend": {
+        "forms": {
+          "IMPFILES": [
+            {
+              "IMPFNUM": "F2",
+              "SUPNAME": "S1",
+              "IMPFILEINV_SUBFORM": [],
+              "MANIVDUTIES_SUBFORM": [],
+              "MANIVPARTS2_SUBFORM": [],
+              "EXPIVDUTIES_SUBFORM": [],
+              "IMPFILECUSTOMS_SUBFORM": [],
+              "IMPFILEPORDI_SUBFORM": []
+            }
+          ]
+        }
+      },
+      "expected": {
+        "complete": false,
+        "sectionStatuses": {
+          "snapshot": "incomplete",
+          "preflight": "incomplete",
+          "landedCost": "incomplete"
+        },
+        "dataCalls": 1
+      }
+    },
+    {
+      "id": "workflow-report-030",
+      "split": "held-out",
+      "category": "workflow-report",
+      "engine": "import",
+      "prompt": "Held-out import supplier invoice currencies are not converted without rates",
+      "authorizedTools": [
+        "priority_import_diagnosis"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "Source observations only; no inferred payment, bank clearing or customer delivery.",
+        "No silent substitution of identifiers or ambiguous names."
+      ],
+      "input": {
+        "impfnum": "F3",
+        "sections": [
+          "snapshot"
+        ]
+      },
+      "backend": {
+        "forms": {
+          "IMPFILES": [
+            {
+              "IMPFNUM": "F3",
+              "SUPNAME": "S1",
+              "IMPFILEINV_SUBFORM": [
+                {
+                  "SUPNAME": "S1",
+                  "TOTPRICE": 100,
+                  "CODE": "USD"
+                },
+                {
+                  "SUPNAME": "S1",
+                  "TOTPRICE": 200,
+                  "CODE": "EUR"
+                }
+              ],
+              "MANIVDUTIES_SUBFORM": [],
+              "MANIVPARTS2_SUBFORM": [],
+              "EXPIVDUTIES_SUBFORM": [],
+              "IMPFILECUSTOMS_SUBFORM": [],
+              "IMPFILEITEMS_SUBFORM": [],
+              "IMPFILEPORDI_SUBFORM": []
+            }
+          ]
+        }
+      },
+      "expected": {
+        "complete": true,
+        "invoiceTotalsByCurrency": {
+          "USD": 100,
+          "EUR": 200
+        },
+        "dataCalls": 1
+      }
+    },
+    {
+      "id": "guard-015",
+      "split": "held-out",
+      "category": "guard",
+      "engine": "query",
+      "prompt": "Held-out source injection is rejected before metadata",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "No mutation or live network call is authorized.",
+        "Unknown, denied or preview evidence must not be upgraded to payment, delivery, execution or authorization."
+      ],
+      "input": {
+        "form": "CUSTOMERS/../AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": []
+      },
+      "backend": {},
+      "expected": {
+        "errorIncludes": "plain form",
+        "metadataCalls": 0,
+        "dataCalls": 0
+      }
+    },
+    {
+      "id": "guard-016",
+      "split": "held-out",
+      "category": "guard",
+      "engine": "query",
+      "prompt": "Held-out wildcard expansion is not a hidden full scan",
+      "authorizedTools": [
+        "priority_prepare_query"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "No mutation or live network call is authorized.",
+        "Unknown, denied or preview evidence must not be upgraded to payment, delivery, execution or authorization."
+      ],
+      "input": {
+        "form": "AINVOICES",
+        "fields": [
+          "DES"
+        ],
+        "filters": [],
+        "expand": [
+          "ITEMS/INNER"
+        ]
+      },
+      "backend": {},
+      "expected": {
+        "errorIncludes": "Expand",
+        "metadataCalls": 0,
+        "dataCalls": 0
+      }
+    },
+    {
+      "id": "guard-017",
+      "split": "held-out",
+      "category": "guard",
+      "engine": "continuation-guard",
+      "prompt": "Held-out foreign-origin continuation is rejected",
+      "authorizedTools": [
+        "safe-continuation"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "No mutation or live network call is authorized.",
+        "Unknown, denied or preview evidence must not be upgraded to payment, delivery, execution or authorization."
+      ],
+      "input": {
+        "link": "https://foreign.invalid/odata/other/CUSTOMERS"
+      },
+      "backend": {},
+      "expected": {
+        "errorIncludes": "configured company",
+        "networkCalls": 0
+      }
+    },
+    {
+      "id": "guard-018",
+      "split": "held-out",
+      "category": "guard",
+      "engine": "continuation-guard",
+      "prompt": "Held-out company traversal cannot be normalized into permission",
+      "authorizedTools": [
+        "safe-continuation"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "No mutation or live network call is authorized.",
+        "Unknown, denied or preview evidence must not be upgraded to payment, delivery, execution or authorization."
+      ],
+      "input": {
+        "link": "../other/CUSTOMERS"
+      },
+      "backend": {},
+      "expected": {
+        "errorIncludes": "Unsafe continuation",
+        "networkCalls": 0
+      }
+    },
+    {
+      "id": "guard-019",
+      "split": "held-out",
+      "category": "guard",
+      "engine": "formatter",
+      "prompt": "Held-out unsupported host sees the same unknown delivery evidence",
+      "authorizedTools": [
+        "legacy-text-result"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "No mutation or live network call is authorized.",
+        "Unknown, denied or preview evidence must not be upgraded to payment, delivery, execution or authorization."
+      ],
+      "input": {
+        "payload": {
+          "deliveryVerified": false,
+          "source": "ERP label only",
+          "meta": {
+            "complete": false
+          }
+        },
+        "textOnlyHost": true
+      },
+      "backend": {},
+      "expected": {
+        "textMatchesStructured": true,
+        "complete": false
+      }
+    },
+    {
+      "id": "guard-020",
+      "split": "held-out",
+      "category": "guard",
+      "engine": "resolver",
+      "prompt": "Held-out permission loss suppresses cached aliases immediately",
+      "authorizedTools": [
+        "priority_resolve_entity"
+      ],
+      "ambiguityAction": "return-evidenced-result",
+      "claimConstraints": [
+        "No mutation or live network call is authorized.",
+        "Unknown, denied or preview evidence must not be upgraded to payment, delivery, execution or authorization."
+      ],
+      "input": {
+        "kind": "customer",
+        "query": "hidden"
+      },
+      "backend": {
+        "forms": {
+          "CUSTOMERS": [
+            {
+              "CUSTNAME": "H1",
+              "CUSTDES": "Hidden Entity"
+            }
+          ]
+        },
+        "aliases": [
+          {
+            "alias": "hidden",
+            "id": "H1"
+          }
+        ],
+        "deniedIds": [
+          "H1"
+        ]
+      },
+      "expected": {
+        "ids": [],
+        "complete": false
+      }
+    }
+  ]
+}

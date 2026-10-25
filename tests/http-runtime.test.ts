@@ -2,9 +2,10 @@ import { createServer as nodeServer, request } from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
-import type { PriorityClient } from '../src/client/priority-client.js';
+import { PriorityClient } from '../src/client/priority-client.js';
 import { RateLimiter } from '../src/client/rate-limit.js';
 import { startHttpServer } from '../src/http.js';
+import { createServer } from '../src/server.js';
 import { config, logger } from './runtime-fixture.js';
 
 const closers: (() => Promise<unknown>)[] = [];
@@ -68,6 +69,19 @@ async function rpc(
 }
 
 describe('HTTP real listener lifecycle', () => {
+  it('releases a server-owned client once and leaves a borrowed client to its owner', async () => {
+    const close = vi.spyOn(PriorityClient.prototype, 'close');
+    const owned = createServer(config, logger);
+    await owned.close();
+    await owned.close();
+    expect(close).toHaveBeenCalledTimes(1);
+    const borrowed = new PriorityClient(config, logger);
+    const server = createServer(config, logger, borrowed);
+    await server.close();
+    expect(close).toHaveBeenCalledTimes(1);
+    borrowed.close();
+    expect(close).toHaveBeenCalledTimes(2);
+  });
   it('initializes independent sessions, lists/calls tools and deletes with bearer and Origin gates', async () => {
     const fake = {
       list: vi.fn().mockResolvedValue({ value: [{ CUSTNAME: 'offline' }] }),
@@ -259,6 +273,27 @@ describe('HTTP real listener lifecycle', () => {
     const replacement = await start({ priorityCompany: 'tenant-a' }, { createMcpServer });
     await init(replacement);
     expect(captured[0]).not.toBe(captured[2]);
+  });
+  it('closes an owned backend only after the last listener and leaves injected clients to their owner', async () => {
+    const clients: PriorityClient[] = [];
+    const createMcpServer = (_cfg: unknown, _logger: unknown, client: PriorityClient) => {
+      clients.push(client);
+      return new McpServer({ name: 'ownership-test', version: '1' });
+    };
+    const first = await start({}, { createMcpServer });
+    const second = await start({}, { createMcpServer });
+    await init(first);
+    await init(second);
+    const close = vi.spyOn(clients[0], 'close');
+    await first.close();
+    expect(close).not.toHaveBeenCalled();
+    await second.close();
+    await second.close();
+    expect(close).toHaveBeenCalledTimes(1);
+    const external = clients[0];
+    const injected = await start({}, { client: external, createMcpServer });
+    await injected.close();
+    expect(close).toHaveBeenCalledTimes(1);
   });
   it('holds a second session backend request until the shared tenant rate window opens', async () => {
     let reads = 0;

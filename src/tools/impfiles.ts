@@ -7,12 +7,10 @@ import type { Config } from '../config.js';
 import { dateRange } from '../lib/dates.js';
 import { probeForm } from '../lib/forms.js';
 import {
-  type ImpfileSnapshot,
   VAT_DECLARATION_PART,
   brokerHasLines,
   buildBrokerInvoiceBody,
   buildGoodsInvoiceBody,
-  classifyInvoices,
   computeLandedCost,
   matchThreeWay,
   preflight,
@@ -26,88 +24,11 @@ import {
   verifyRecordUpdate,
   verifyWrite,
 } from '../lib/write-verification.js';
+import { loadImportRecord, loadSnapshot, normalizeSnapshot } from '../services/import-read.js';
 
 const IMPFILES = getSchema('IMPFILES');
 
-/**
- * The seven load-bearing sub-forms of an import file, mapped to friendly snapshot keys.
- * Line-level linked costs/items do NOT appear inside the invoices sub-form, so impfile_get
- * MUST expand all of these to give a complete picture (mapping doc §2).
- */
-const IMPFILE_SUBFORMS: ReadonlyArray<{ subform: string; key: string }> = [
-  { subform: 'IMPFILEINV_SUBFORM', key: 'invoices' },
-  { subform: 'MANIVDUTIES_SUBFORM', key: 'manualCostAllocations' },
-  { subform: 'MANIVPARTS2_SUBFORM', key: 'extraProductLines' },
-  { subform: 'EXPIVDUTIES_SUBFORM', key: 'expectedCosts' },
-  { subform: 'IMPFILECUSTOMS_SUBFORM', key: 'customsEstimate' },
-  { subform: 'IMPFILEITEMS_SUBFORM', key: 'goodsContent' },
-  { subform: 'IMPFILEPORDI_SUBFORM', key: 'linkedPoLines' },
-];
-
 type Row = Record<string, unknown>;
-
-/** Sum a numeric field across rows, bucketed by a currency field. */
-function sumByCurrency(
-  rows: Row[],
-  amountField: string,
-  codeField = 'CODE',
-): Record<string, number> {
-  const totals: Record<string, number> = {};
-  for (const r of rows) {
-    const amt = Number(r[amountField]);
-    if (!Number.isFinite(amt)) continue;
-    const code = String(r[codeField] ?? '?');
-    totals[code] = (totals[code] ?? 0) + amt;
-  }
-  return totals;
-}
-
-/**
- * Build a normalized, decision-ready snapshot from a raw IMPFILES record whose sub-forms were
- * expanded. Splits header from sub-forms, renames sub-forms to friendly keys, and adds a `derived`
- * summary (per-currency invoice totals, goods-vs-cost invoice split, customs-estimate flags).
- */
-function normalizeSnapshot(record: Row): Row {
-  const header: Row = {};
-  const sections: Row = {};
-  const bySubform = new Map(IMPFILE_SUBFORMS.map((s) => [s.subform, s.key]));
-
-  for (const [k, v] of Object.entries(record)) {
-    const friendly = bySubform.get(k);
-    if (friendly) {
-      sections[friendly] = Array.isArray(v) ? v : [];
-    } else if (!k.endsWith('_SUBFORM')) {
-      header[k] = v;
-    }
-    // Unmapped *_SUBFORM keys (notes, attachments, versions…) are intentionally dropped from
-    // the snapshot to keep it focused; fetch them via priority_query if needed.
-  }
-
-  const invoices = (sections.invoices as Row[]) ?? [];
-  // Goods invoices come from the file's own supplier; broker/forwarder invoices from others.
-  // Shared with preflight / computeLandedCost so all three classify identically (and safely when
-  // the header supplier is blank — an undefined supplier would otherwise bucket every invoice as cost).
-  const { goods, cost, supplierKnown } = classifyInvoices(invoices, header.SUPNAME);
-  const customs = (sections.customsEstimate as Row[]) ?? [];
-
-  const derived = {
-    invoiceCount: invoices.length,
-    supplierKnown,
-    goodsInvoices: supplierKnown ? goods.length : null,
-    costInvoices: supplierKnown ? cost.length : null,
-    invoiceTotalsByCurrency: sumByCurrency(invoices, 'TOTPRICE'),
-    hasManualCostAllocations: ((sections.manualCostAllocations as Row[]) ?? []).length > 0,
-    hasExpectedCosts: ((sections.expectedCosts as Row[]) ?? []).length > 0,
-    goodsLineCount: ((sections.goodsContent as Row[]) ?? []).length,
-    customsEstimate: {
-      lineCount: customs.length,
-      totalDuty: customs.reduce((s, c) => s + (Number(c.CUSTOMS) || 0), 0),
-      partsWithoutCustomsItem: customs.filter((c) => !c.CUSTOMSITEMNAME).length,
-    },
-  };
-
-  return { header, ...sections, derived };
-}
 
 /**
  * Shared [param key → Priority header field] map for impfile_open / impfile_update, so both write
@@ -133,14 +54,6 @@ function applyImpfileHeaderFields(body: Row, params: Record<string, unknown>): R
     if (params[key] !== undefined) body[field] = params[key];
   }
   return body;
-}
-
-/** Fetch an import file with all sub-forms and return the normalized snapshot (for preflight /
- * landed-cost / close, which reason over the same aggregate impfile_get produces). */
-async function loadSnapshot(client: PriorityClient, impfnum: string): Promise<ImpfileSnapshot> {
-  const qb = new ODataBuilder().expand(...IMPFILE_SUBFORMS.map((s) => s.subform));
-  const record = await client.get<Row>('IMPFILES', impfnum, qb.build());
-  return normalizeSnapshot(record) as unknown as ImpfileSnapshot;
 }
 
 /** Params shared by the three impfile_link_invoice routes. */
@@ -398,8 +311,7 @@ Expands and aggregates ALL load-bearing sub-forms into a normalized shape:
     },
     async (params) => {
       try {
-        const qb = new ODataBuilder().expand(...IMPFILE_SUBFORMS.map((s) => s.subform));
-        const record = await client.get<Row>('IMPFILES', params.impfnum, qb.build());
+        const record = await loadImportRecord(client, params.impfnum);
         return textResult(params.raw ? record : normalizeSnapshot(record));
       } catch (err) {
         throw toMcpError(err);

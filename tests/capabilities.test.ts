@@ -135,3 +135,31 @@ it('pages the complete catalog without skipping names even when a page is size-l
     await s.close();
   }
 });
+
+it('bounds named summary discovery without skipping catalog entries', async () => {
+  const s = await session();
+  try {
+    const names: string[] = [];
+    let skip: number | null = 0;
+    while (skip !== null) {
+      const result = await s.client.callTool({
+        name: 'priority_get_capabilities',
+        arguments: { view: 'summary', top: 100, skip },
+      });
+      const content = result.content as Array<{ text: string }>;
+      expect(content[0].text.length).toBeLessThanOrEqual(8000);
+      const payload = result.structuredContent as {
+        capabilities: Array<{ name: string }>;
+        returned: number;
+        nextSkip: number | null;
+      };
+      expect(payload.returned).toBe(payload.capabilities.length);
+      names.push(...payload.capabilities.map((x) => x.name));
+      skip = payload.nextSkip;
+      expect(names.length).toBeLessThan(500);
+    }
+    expect(names.sort()).toEqual((await s.client.listTools()).tools.map((x) => x.name).sort());
+  } finally {
+    await s.close();
+  }
+});

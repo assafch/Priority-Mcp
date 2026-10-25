@@ -5,3 +5,6 @@ dist
 .local-web/
 output/playwright/
 .playwright-cli/
+
+# Generated offline measurements and local profiler artifacts.
+artifacts/

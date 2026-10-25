@@ -1,3 +1,5 @@
+import { currentOperation, readObservationSnapshot } from '../runtime/operation-context.js';
+
 /** Bounded, valid JSON for legacy text clients and structured MCP consumers. */
 export const MAX_RESULT_CHARS = 24_000;
 
@@ -11,19 +13,23 @@ function objectPayload(data: unknown): JsonObject {
 }
 
 /** Keep small results identical; trim payloads, never the serialized JSON text. */
-export function boundedPayload(data: unknown): JsonObject {
+export function boundedPayload(
+  data: unknown,
+  maxChars = MAX_RESULT_CHARS,
+  preserveSourceCompleteness = false,
+): JsonObject {
   const obj = objectPayload(data);
-  if (JSON.stringify(obj, null, 2).length <= MAX_RESULT_CHARS) return obj;
+  if (JSON.stringify(obj, null, 2).length <= maxChars) return obj;
   if (obj.meta && typeof obj.meta === 'object' && !Array.isArray(obj.meta)) {
     const meta = obj.meta as JsonObject;
     if ('complete' in meta) {
-      meta.complete = false;
+      if (!preserveSourceCompleteness) meta.complete = false;
       meta.outputTruncated = true;
     }
   }
   const originalLengths = new Map<string, number>();
   for (let attempt = 0; attempt < 200; attempt++) {
-    if (JSON.stringify(obj, null, 2).length <= MAX_RESULT_CHARS) return obj;
+    if (JSON.stringify(obj, null, 2).length <= maxChars) return obj;
     let candidate:
       | { parent: JsonObject; key: string; value: unknown; size: number; path: string }
       | undefined;
@@ -72,8 +78,10 @@ export function boundedPayload(data: unknown): JsonObject {
   }
   // Very wide/deep objects of small scalar fields cannot be shortened by the loop above.
   // Replace their largest subtrees with an explicit omission marker until they fit.
-  while (JSON.stringify(obj, null, 2).length > MAX_RESULT_CHARS) {
-    const entries = Object.entries(obj).filter(([k]) => k !== '_truncated');
+  while (JSON.stringify(obj, null, 2).length > maxChars) {
+    const entries = Object.entries(obj).filter(
+      ([k]) => k !== '_truncated' && !(preserveSourceCompleteness && k === 'meta'),
+    );
     if (!entries.length) return { _truncated: { note: 'Result omitted: exceeds output budget.' } };
     entries.sort((a, b) => JSON.stringify(b[1]).length - JSON.stringify(a[1]).length);
     const [key] = entries[0];
@@ -87,8 +95,42 @@ export function boundedPayload(data: unknown): JsonObject {
   return obj;
 }
 
-export function textResult(data: unknown) {
-  const structuredContent = boundedPayload(data);
+export function textResult(data: unknown, maxChars = MAX_RESULT_CHARS) {
+  const observation = readObservationSnapshot();
+  let payload = data;
+  if (observation.sensitiveReads > 0) {
+    const object =
+      data && typeof data === 'object' && !Array.isArray(data)
+        ? (data as JsonObject)
+        : { value: data };
+    const previous =
+      object.meta && typeof object.meta === 'object' ? (object.meta as JsonObject) : {};
+    const ownsObservation = ['observedAt', 'firstObservedAt', 'lastObservedAt', 'freshness'].some(
+      (key) => Object.hasOwn(previous, key),
+    );
+    const sourceStart = previous.firstObservedAt ?? previous.observedAt;
+    const sourceTime = typeof sourceStart === 'string' ? Date.parse(sourceStart) : Number.NaN;
+    payload = {
+      ...object,
+      meta: {
+        ...previous,
+        source: previous.source ?? 'Priority read observations',
+        complete: previous.complete ?? null,
+        traceId: previous.traceId ?? currentOperation()?.traceId ?? 'local',
+        nextCursor: previous.nextCursor ?? null,
+        warnings: previous.warnings ?? [],
+        ...(ownsObservation
+          ? {
+              requestObservations: observation,
+              ...(Number.isFinite(sourceTime)
+                ? { ageMs: Math.max(0, Date.now() - sourceTime) }
+                : {}),
+            }
+          : observation),
+      },
+    };
+  }
+  const structuredContent = boundedPayload(payload, maxChars);
   return {
     content: [{ type: 'text' as const, text: JSON.stringify(structuredContent, null, 2) }],
     structuredContent,

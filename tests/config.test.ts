@@ -65,5 +65,34 @@ describe('connection URL credentials', () => {
     });
     expect(parsed.priorityReadOnly).toBe(true);
     expect(parsed.mcpHttpHost).toBe('127.0.0.1');
+    expect(parsed.rateLimitPerMinute).toBe(90);
+    expect(parsed.cacheMaxBytes).toBe(33554432);
+    expect(parsed.priorityMaxConcurrency).toBe(4);
+    expect(parsed.priorityMaxPending).toBe(100);
+  });
+  it('parses operator quota, alias and decoded-byte overrides and notices an increased quota', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const notice = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const parsed = loadConfig({
+      PRIORITY_SERVICE_ROOT: 'https://example.test/odata/Priority/test.ini/demo',
+      PRIORITY_PAT: 'synthetic',
+      RATE_LIMIT_PER_MINUTE: '95',
+      PRIORITY_RATE_SCOPE: 'operator-account',
+      PRIORITY_MAX_CONCURRENCY: '2',
+      PRIORITY_MAX_PENDING: '50',
+      CACHE_MAX_BYTES: '1024',
+      PRIORITY_MAX_READ_BODY_BYTES: '2048',
+      PRIORITY_MAX_METADATA_BODY_BYTES: '4096',
+    });
+    expect(parsed).toMatchObject({
+      rateLimitPerMinute: 95,
+      priorityRateScope: 'operator-account',
+      priorityMaxConcurrency: 2,
+      priorityMaxPending: 50,
+      cacheMaxBytes: 1024,
+      priorityMaxReadBodyBytes: 2048,
+      priorityMaxMetadataBodyBytes: 4096,
+    });
+    expect(notice).toHaveBeenCalledTimes(1);
   });
 });

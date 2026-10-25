@@ -1,8 +1,8 @@
-# Tool capabilities — 0.2.0
+# Tool capabilities — unreleased faster/smarter update
 
 This catalog describes code, not current tenant permissions. Use `priority_get_capabilities` for policy and dated form-readability evidence; follow `nextSkip`. A successful form probe does not enable an unavailable handler or prove a write.
 
-105 registered definitions. Existing tool names remain available subject to allow/block policy. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
+110 registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
 
 | Tool | Domain | Mode | Implementation |
 | --- | --- | --- | --- |
@@ -45,7 +45,9 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `priority_get_entity_metadata` | generic | read | implemented |
 | `priority_get_record` | generic | read | implemented |
 | `priority_list_forms` | generic | read | implemented |
+| `priority_prepare_query` | generic | read | implemented |
 | `priority_query` | generic | read | implemented |
+| `priority_resolve_entity` | generic | read | implemented |
 | `priority_update_line` | generic | write | implemented |
 | `priority_update_record` | generic | write | implemented |
 | `impfile_close` | impfiles | write | implemented |
@@ -111,6 +113,9 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `priority_list_suppliers` | suppliers | read | implemented |
 | `priority_search_suppliers` | suppliers | read | implemented |
 | `priority_list_warehouses` | warehouses | read | implemented |
+| `priority_customer_snapshot` | workflows | read | implemented |
+| `priority_import_diagnosis` | workflows | read | implemented |
+| `priority_order_diagnosis` | workflows | read | implemented |
 
 ## Key and result contracts
 
@@ -123,5 +128,7 @@ Write status separates preview, blocked, verified, unverified, unknown and faile
 ```json
 {"domain":"invoices","includeUnavailable":true,"refresh":false,"top":25,"skip":0}
 ```
+
+Detailed tool help: `priority://tools/{name}` or `priority_get_capabilities` with `names` and `view:detail`. Typed resolver/query/workflow outputs carry evidence and completeness. See [performance rollout](performance-rollout.md).
 
 Call `priority_healthcheck` without arguments for local diagnostics, or set `checkBackend:true` for a read-only backend check. No diagnostic tool mutates ERP data.

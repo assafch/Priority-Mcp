@@ -38,7 +38,10 @@
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
-    "inspect": "npx @modelcontextprotocol/inspector node --experimental-strip-types src/index.ts"
+    "inspect": "npx @modelcontextprotocol/inspector node --experimental-strip-types src/index.ts",
+    "benchmark:mcp": "npm run build && node scripts/benchmark-mcp.mjs",
+    "evaluate:mcp": "npm run build && node scripts/evaluate-mcp.mjs",
+    "profile:readonly": "npm run build && node scripts/profile-readonly.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.17",

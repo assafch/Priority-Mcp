@@ -1,35 +1,32 @@
-/**
- * Capability-aware fuzzy search over a Priority form.
- *
- * Why this exists: some Priority installations' OData providers do NOT implement string
- * functions and reject `contains(...)` / `startswith(...)` with HTTP 501
- * ("Function 'contains' is not supported"). The dedicated search tools and the `search`
- * params on the list tools used to hard-fail on those installs. searchForm() tries the
- * native `contains()` filter once, and on a 501 transparently falls back to fetching a
- * PROJECTED page of rows and filtering them in-process — returning only the matches, so the
- * model never receives a giant unfiltered dump. The "string functions unsupported" verdict
- * is memoized per authenticated client, so subsequent searches skip the doomed `contains` round-trip.
- */
-
+/** Capability-aware bounded search with explicit coverage and safe OData continuation. */
 import { PriorityError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
+import { currentOperation } from '../runtime/operation-context.js';
+import { type PageScan, fetchAllPages } from './paginate.js';
+import { getSchema } from './priority-schema.js';
+import { handleBindingFor, queryHashFor, resultHandles } from './result-handles.js';
 import { escapeODataString } from './sanitize.js';
+import { knowledgeFor } from './schema-service.js';
 
-// Tenant-scoped capability memo.
-let stringFnSupport = new WeakMap<PriorityClient, boolean>();
-
-/** Test hook: forget the cached capability verdict. */
+// Legacy inspection hooks retain their shape; production evidence is per-form and expires.
+let inspected = new WeakMap<PriorityClient, { form: string; value: boolean }>();
 export function _resetStringFnSupport(): void {
-  stringFnSupport = new WeakMap();
+  inspected = new WeakMap();
 }
-
-/** Test/inspection hook: current capability verdict (undefined until first probe). */
 export function _stringFnSupport(client: PriorityClient): boolean | undefined {
-  return stringFnSupport.get(client);
+  const last = inspected.get(client);
+  if (!last) return undefined;
+  return supportFor(client, last.form);
 }
-
-/** Does this error mean the installation rejects an OData function (contains/startswith/…)? */
+function supportFor(client: PriorityClient, form: string): boolean | undefined {
+  const status = knowledgeFor(client).capabilities.get(form, 'contains')?.status;
+  return status === 'supported' ? true : status === 'unsupported' ? false : undefined;
+}
+function rememberSupport(client: PriorityClient, form: string, value: boolean): void {
+  knowledgeFor(client).capabilities.put(form, 'contains', value ? 'supported' : 'unsupported');
+  inspected.set(client, { form, value });
+}
 export function isUnsupportedFunctionError(err: unknown): boolean {
   if (!(err instanceof PriorityError)) return false;
   if (err.statusCode === 501) return true;
@@ -37,170 +34,219 @@ export function isUnsupportedFunctionError(err: unknown): boolean {
   const hay = `${err.message} ${body}`.toLowerCase();
   return (
     hay.includes('is not supported') &&
-    (hay.includes('contains') ||
-      hay.includes('startswith') ||
-      hay.includes('substringof') ||
-      hay.includes('tolower'))
-  );
-}
-
-/** Does this 400 mean a field name in $select/$filter doesn't exist on the form? */
-function isUnknownPropertyError(err: unknown): boolean {
-  return (
-    err instanceof PriorityError &&
-    err.statusCode === 400 &&
-    /could not find a property/i.test(err.message)
+    ['contains', 'startswith', 'substringof', 'tolower'].some((fn) => hay.includes(fn))
   );
 }
 
 export interface SearchOptions {
   form: string;
   query: string;
-  /** Fields to match the query against. */
+  /** Fields to match; always included in the projection. */
   fields: string[];
-  /** Fields to return (defaults to `fields`). Match fields are always added to the projection. */
   select?: string[];
-  /** Max matches to return. */
   top?: number;
-  /** Extra server-side $filter ANDed onto the search (applied in both strategies). */
   baseFilter?: string;
-  /** Sort spec applied server-side, e.g. "CUSTDES asc". */
+  /** Comma-separated ordering; all known key fields are appended as tie-breakers. */
   orderby?: string;
-  /** Max rows to scan in the client-filter fallback (default 2000). */
+  /** Full form key when supplied by schema-aware callers. */
+  keyFields?: string[];
+  /** Maximum rows scanned by client filtering (default 2000). */
   scanCap?: number;
+  signal?: AbortSignal;
+  /** Absolute operation deadline, including every page and the native capability attempt. */
+  deadlineAt?: number;
+  /** Opaque scoped continuation; raw URLs are never accepted. */
+  cursor?: string;
 }
-
 export interface SearchResult<T> {
   value: T[];
   meta: {
     strategy: 'contains' | 'client-filter';
-    /** Rows fetched/scanned in the fallback strategy. */
     scanned?: number;
-    /** True when the scan stopped at `scanCap` — there may be unscanned rows beyond it. */
     scanCapped?: boolean;
-    /** True when more than `top` matches existed and the surplus was dropped. */
     truncated?: boolean;
+    /** True only when source coverage and returned matching rows are both complete. */
+    complete: boolean;
+    stopReason: PageScan<T>['stopReason'] | 'maxResults';
+    /** Bound to the original query, authenticated client, policy and cache generation. */
+    nextCursor: string | null;
   };
 }
-
-function containsExpr(fields: string[], query: string): string {
-  const esc = escapeODataString(query);
-  return fields.map((f) => `contains(${f},'${esc}')`).join(' or ');
-}
-
-function applyOrderby(qb: ODataBuilder, orderby?: string): void {
-  if (!orderby) return;
-  const [field, dir] = orderby.trim().split(/\s+/);
-  if (field) qb.orderBy(field, dir?.toLowerCase() === 'desc' ? 'desc' : 'asc');
+function applyOrderby(qb: ODataBuilder, orderby: string | undefined, keys: string[]): void {
+  const ordered = new Set<string>();
+  for (const spec of orderby?.split(',') ?? []) {
+    const [field, dir] = spec.trim().split(/\s+/);
+    if (!field) continue;
+    qb.orderBy(field, dir?.toLowerCase() === 'desc' ? 'desc' : 'asc');
+    ordered.add(field);
+  }
+  for (const key of keys) if (!ordered.has(key)) qb.orderBy(key);
 }
 
 export async function searchForm<T = Record<string, unknown>>(
   client: PriorityClient,
   opts: SearchOptions,
 ): Promise<SearchResult<T>> {
-  const top = opts.top ?? 20;
-  const select = opts.select ?? opts.fields;
-  const scanCap = opts.scanCap ?? 2000;
-
-  // 1) Native contains() — unless we already learned this install rejects string functions.
-  if (stringFnSupport.get(client) !== false) {
-    try {
-      const expr = containsExpr(opts.fields, opts.query);
-      const filter = opts.baseFilter ? `(${expr}) and ${opts.baseFilter}` : expr;
-      const qb = new ODataBuilder().filter(filter);
-      if (select.length) qb.select(...select);
-      applyOrderby(qb, opts.orderby);
-      qb.top(top + 1); // one extra row reveals whether more matches exist beyond `top`
-      const res = await client.list<T>(opts.form, qb.build());
-      stringFnSupport.set(client, true);
-      const rows = res.value ?? [];
-      return {
-        value: rows.slice(0, top),
-        meta: { strategy: 'contains', truncated: rows.length > top },
-      };
-    } catch (err) {
-      if (isUnsupportedFunctionError(err)) {
-        stringFnSupport.set(client, false); // remember; skip the doomed round-trip next time
-      } else if (!isUnknownPropertyError(err)) {
-        // A bad/missing field in our expr or projection is recoverable via the client-side
-        // fallback (it drops the projection and skips absent fields); anything else is real.
-        throw err;
-      }
-    }
-  }
-
-  // 2) Fallback: page through projected rows (+ base filter) and match in-process.
-  const { rows, more } = await fetchForClientFilter<T>(client, opts, select, scanCap);
-  const needle = opts.query.toLowerCase();
-  const matches = rows.filter((row) =>
-    opts.fields.some((f) => {
-      const v = (row as Record<string, unknown>)[f];
-      return v != null && String(v).toLowerCase().includes(needle);
-    }),
+  const policyScope = currentOperation()?.policyScope;
+  if (opts.cursor !== undefined && (!policyScope || !/^[A-Za-z0-9_-]{43}$/.test(opts.cursor)))
+    throw new Error('Search cursor requires an active matching policy scope; restart the search.');
+  const queryHash = queryHashFor({
+    form: opts.form,
+    query: opts.query,
+    fields: opts.fields,
+    select: opts.select ?? null,
+    top: opts.top ?? 20,
+    baseFilter: opts.baseFilter ?? null,
+    orderby: opts.orderby ?? null,
+    keyFields: opts.keyFields ?? null,
+    scanCap: opts.scanCap ?? 2000,
+  });
+  const binding = handleBindingFor(
+    client,
+    policyScope ?? 'isolated-unconfigured-search',
+    queryHash,
   );
-  return {
-    value: matches.slice(0, top),
-    meta: {
-      strategy: 'client-filter',
-      scanned: rows.length,
-      scanCapped: more,
-      truncated: matches.length > top,
-    },
-  };
-}
-
-/**
- * Page through up to `scanCap` projected rows. Priority OData servers often cap a single
- * response below an explicit large $top and don't expose a row count, so we page with $skip
- * rather than trusting one big request. `more` is true when we stopped at the cap with a full
- * final page (rows may remain beyond the scan window) — so scanCapped never under-reports.
- */
-async function fetchForClientFilter<T>(
-  client: PriorityClient,
-  opts: SearchOptions,
-  select: string[],
-  scanCap: number,
-): Promise<{ rows: T[]; more: boolean }> {
-  // Project to the match fields + requested fields so we can filter locally on tiny rows.
-  const projection = Array.from(new Set([...select, ...opts.fields]));
-  const pageSize = Math.min(scanCap, 500);
-  const rows: T[] = [];
-  let skip = 0;
-  let useProjection = true;
-  let more = false;
-
-  while (rows.length < scanCap) {
-    const take = Math.min(pageSize, scanCap - rows.length);
-    const build = (sel: string[]): string => {
-      const qb = new ODataBuilder();
-      if (opts.baseFilter) qb.filter(opts.baseFilter);
-      if (sel.length) qb.select(...sel);
-      applyOrderby(qb, opts.orderby);
-      qb.top(take);
-      if (skip > 0) qb.skip(skip);
-      return qb.build();
-    };
-
-    let page: T[];
-    try {
-      page = (await client.list<T>(opts.form, build(useProjection ? projection : []))).value ?? [];
-    } catch (err) {
-      // A field in the projection doesn't exist — retry this page pulling all columns.
-      if (useProjection && isUnknownPropertyError(err)) {
-        useProjection = false;
-        continue;
-      }
-      throw err;
-    }
-
-    rows.push(...page);
-    if (page.length < take) break; // short page ⇒ end of data; `more` stays false
-    skip += page.length;
-    if (rows.length >= scanCap) {
-      more = true; // stopped at the cap with a full page — there may be more
-      break;
+  interface SearchState {
+    kind: 'search';
+    strategy: 'contains' | 'client-filter';
+    skip: number;
+    nextLink?: string;
+    pending: T[];
+    sourceComplete: boolean;
+  }
+  const previous = opts.cursor ? resultHandles.get<SearchState>(opts.cursor, binding) : undefined;
+  if (previous && previous.kind !== 'search')
+    throw new Error('Cursor is not a search; restart the search.');
+  const top = opts.top ?? 20;
+  const scanCap = opts.scanCap ?? 2000;
+  if (
+    !Number.isSafeInteger(top) ||
+    top < 1 ||
+    !Number.isSafeInteger(top + 1) ||
+    !Number.isSafeInteger(scanCap) ||
+    scanCap < 1
+  )
+    throw new Error('top and scanCap must be positive safe integers');
+  if (opts.deadlineAt !== undefined && !Number.isFinite(opts.deadlineAt))
+    throw new Error('deadlineAt must be a finite timestamp');
+  const keys = opts.keyFields ?? getSchema(opts.form)?.key ?? [];
+  const projection = [...new Set([...(opts.select ?? opts.fields), ...opts.fields, ...keys])];
+  const controller = new AbortController();
+  const signal = opts.signal
+    ? AbortSignal.any([opts.signal, controller.signal])
+    : controller.signal;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (opts.deadlineAt !== undefined) {
+    const remaining = opts.deadlineAt - Date.now();
+    if (remaining <= 0) controller.abort();
+    else {
+      timer = setTimeout(() => controller.abort(), Math.min(remaining, 2_147_483_647));
+      timer.unref?.();
     }
   }
-
-  return { rows, more };
+  const scan = (native: boolean): Promise<PageScan<T>> => {
+    const expr = opts.fields
+      .map((f) => `contains(${f},'${escapeODataString(opts.query)}')`)
+      .join(' or ');
+    const filter = native
+      ? opts.baseFilter
+        ? `(${expr}) and (${opts.baseFilter})`
+        : expr
+      : opts.baseFilter;
+    return fetchAllPages<T>(
+      async (skip, take) => {
+        if (previous?.nextLink && skip === 0)
+          return client.listNext<T>(previous.nextLink, { signal });
+        const qb = new ODataBuilder().top(take);
+        if (skip || previous?.skip) qb.skip(skip + (previous?.skip ?? 0));
+        if (filter) qb.filter(filter);
+        if (projection.length) qb.select(...projection);
+        applyOrderby(qb, opts.orderby, keys);
+        return client.list<T>(opts.form, qb.build(), { signal });
+      },
+      {
+        pageSize: 500,
+        maxRows: native ? Math.max(1, top + 1 - (previous?.pending.length ?? 0)) : scanCap,
+        signal,
+        deadlineAt: opts.deadlineAt,
+        ...(typeof client.listNext === 'function'
+          ? {
+              fetchNext: (link: string) => client.listNext<T>(link, { signal }),
+            }
+          : {}),
+      },
+    );
+  };
+  try {
+    let result: PageScan<T> | undefined;
+    let strategy: SearchResult<T>['meta']['strategy'] = previous?.strategy ?? 'contains';
+    if (previous && (previous.sourceComplete || previous.pending.length > top))
+      result = {
+        rows: [],
+        pages: 0,
+        capped: false,
+        complete: previous.sourceComplete,
+        stopReason: previous.sourceComplete ? 'exhausted' : 'maxRows',
+        mode: 'skip',
+      };
+    if (
+      !result &&
+      (previous?.strategy === 'contains' || (!previous && supportFor(client, opts.form) !== false))
+    ) {
+      try {
+        result = await scan(true);
+        if (result.pages) rememberSupport(client, opts.form, true);
+      } catch (err) {
+        // Schema errors remain visible: never silently fetch every column or omit match fields.
+        if (!isUnsupportedFunctionError(err)) throw err;
+        rememberSupport(client, opts.form, false);
+      }
+    }
+    if (!result) {
+      strategy = 'client-filter';
+      result = await scan(false);
+    }
+    const needle = opts.query.toLowerCase();
+    const newMatches =
+      strategy === 'contains'
+        ? result.rows
+        : result.rows.filter((row) =>
+            opts.fields.some((f) => {
+              const value = (row as Record<string, unknown>)[f];
+              return value != null && String(value).toLowerCase().includes(needle);
+            }),
+          );
+    const matches = [...(previous?.pending ?? []), ...newMatches];
+    const truncated = matches.length > top;
+    const state: SearchState = {
+      kind: 'search',
+      strategy,
+      skip: (previous?.skip ?? 0) + result.rows.length,
+      ...(result.nextCursor?.nextLink ? { nextLink: result.nextCursor.nextLink } : {}),
+      pending: matches.slice(top),
+      sourceComplete: result.complete,
+    };
+    if (!result.rows.length && previous?.nextLink && !result.complete)
+      state.nextLink = previous.nextLink;
+    const nextCursor =
+      policyScope && (!result.complete || truncated) ? resultHandles.create(binding, state) : null;
+    return {
+      value: matches.slice(0, top),
+      meta: {
+        strategy,
+        ...(strategy === 'client-filter'
+          ? { scanned: result.rows.length, scanCapped: result.capped }
+          : {}),
+        truncated,
+        complete: result.complete && !truncated,
+        stopReason:
+          truncated && (result.complete || (strategy === 'contains' && result.capped))
+            ? 'maxResults'
+            : result.stopReason,
+        nextCursor,
+      },
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

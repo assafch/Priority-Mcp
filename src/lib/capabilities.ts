@@ -2,7 +2,9 @@ import { PriorityError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { TOOL_DEFINITIONS, type ToolDefinition } from './capability-definitions.js';
+import type { CapabilityStatus } from './capability-store.js';
 import { isApiFlagOffError } from './forms.js';
+import { knowledgeFor } from './schema-service.js';
 
 export type Availability =
   | 'available'
@@ -19,10 +21,6 @@ export interface Capability extends ToolDefinition {
   checkedAt: string | null;
   evidence: 'static' | 'live-read';
 }
-interface Probe {
-  availability: Availability;
-  checkedAt: string;
-}
 export function toolAllowed(config: Config, name: string): boolean {
   return (
     !(config.priorityBlockedTools ?? []).includes(name) &&
@@ -30,8 +28,6 @@ export function toolAllowed(config: Config, name: string): boolean {
   );
 }
 export class CapabilityCatalog {
-  private probes = new Map<string, Probe>();
-  private refreshInFlight: Promise<void> | undefined;
   constructor(
     private client: PriorityClient,
     private config: Config,
@@ -43,7 +39,24 @@ export class CapabilityCatalog {
         (!domain || d.domain === domain) &&
         (includeUnavailable || d.implementation === 'implemented'),
     ).map((d) => {
-      const probes = d.requiredForms.map((f) => this.probes.get(f));
+      const probes = d.requiredForms.map((f) => {
+        const p = knowledgeFor(this.client).capabilities.get(f, 'read');
+        return p
+          ? {
+              checkedAt: p.checkedAt,
+              availability: (
+                {
+                  supported: 'available',
+                  unsupported: 'unknown',
+                  denied: 'permission-denied',
+                  absent: 'absent',
+                  'api-disabled': 'api-disabled',
+                  unknown: 'unknown',
+                } as const
+              )[p.status],
+            }
+          : undefined;
+      });
       const fresh =
         probes.length > 0 &&
         probes.every((p) => p && Date.now() - Date.parse(p.checkedAt) < 900000);
@@ -73,39 +86,31 @@ export class CapabilityCatalog {
     });
   }
 
-  async refresh(entries: Capability[]): Promise<void> {
-    // Queue refreshes before awaiting, so concurrent callers share the same four-read bound.
-    const previous = this.refreshInFlight;
+  async refresh(entries: Capability[], force = false): Promise<void> {
+    const store = knowledgeFor(this.client).capabilities;
     const forms = [
       ...new Set(entries.filter((e) => e.access === 'enabled').flatMap((e) => e.requiredForms)),
     ];
-    let cursor = 0;
-    const run = async () => {
-      for (;;) {
-        const form = forms[cursor++];
-        if (!form) return;
-        let availability: Availability = 'unknown';
-        try {
-          await this.client.request(form, undefined, '?$top=1', { cache: false });
-          availability = 'available';
-        } catch (error) {
-          if (isApiFlagOffError(error)) availability = 'api-disabled';
-          else if (error instanceof PriorityError && [401, 403].includes(error.statusCode))
-            availability = 'permission-denied';
-          else if (error instanceof PriorityError && error.statusCode === 404)
-            availability = 'absent';
-        }
-        this.probes.set(form, { availability, checkedAt: new Date().toISOString() });
-      }
-    };
-    const pending = (previous ?? Promise.resolve()).then(async () => {
-      await Promise.all(Array.from({ length: Math.min(4, forms.length) }, run));
-    });
-    this.refreshInFlight = pending;
-    try {
-      await pending;
-    } finally {
-      if (this.refreshInFlight === pending) this.refreshInFlight = undefined;
-    }
+    await Promise.all(
+      forms.map((form) =>
+        store.probe(
+          form,
+          'read',
+          async (): Promise<CapabilityStatus> => {
+            try {
+              await this.client.request(form, undefined, '?$top=1', { cache: false });
+              return 'supported';
+            } catch (error) {
+              if (isApiFlagOffError(error)) return 'api-disabled';
+              if (error instanceof PriorityError && [401, 403].includes(error.statusCode))
+                return 'denied';
+              if (error instanceof PriorityError && error.statusCode === 404) return 'absent';
+              return 'unknown';
+            }
+          },
+          force,
+        ),
+      ),
+    );
   }
 }

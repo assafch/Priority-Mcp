@@ -5,12 +5,15 @@ import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { dateRangeFilter } from '../lib/dates.js';
+import { EntityResolver } from '../lib/entity-resolver.js';
 import { fetchAllPages } from '../lib/paginate.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
-import { searchForm } from '../lib/search.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
 import { verifyRecordCreate } from '../lib/write-verification.js';
+import { createOperation, currentOperation } from '../runtime/operation-context.js';
+import { scanObservation, scanOperationOptions } from '../services/reports/observations.js';
+import { entityResolutionAllowed } from './entity-resolution.js';
 
 const AINVOICES = getSchema('AINVOICES');
 
@@ -21,14 +24,14 @@ export function registerInvoiceTools(server: McpServer, client: PriorityClient, 
 
 Returns a paginated, compact invoice list (key fields only — use priority_get_invoice for full
 detail with line items). Dates filter on IVDATE (the invoice date) and sort by it by default.
-Pass either customerId (the exact CUSTNAME) or customerName (a name to resolve automatically).`,
+Pass either customerId (the exact CUSTNAME) or customerName (returns verified candidates; names require an explicit customerId selection).`,
     {
       customerId: z.string().optional().describe('Filter by exact CUSTNAME'),
       customerName: z
         .string()
         .optional()
         .describe(
-          'Customer name to resolve to a CUSTNAME automatically (use instead of customerId)',
+          'Customer name or exact code to resolve safely; ambiguous names return candidates without invoice data',
         ),
       dateFrom: z.string().optional().describe('Start date (ISO 8601, e.g. "2025-01-01")'),
       dateTo: z.string().optional().describe('End date (ISO 8601)'),
@@ -38,37 +41,36 @@ Pass either customerId (the exact CUSTNAME) or customerName (a name to resolve a
       orderBy: z.enum(['IVNUM', 'IVDATE', 'TOTPRICE']).default('IVDATE'),
       orderDir: z.enum(['asc', 'desc']).default('desc'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
         const rangeFilter = dateRangeFilter('IVDATE', params.dateFrom, params.dateTo);
         let customerId = params.customerId;
         let resolvedCustomer: Record<string, unknown> | undefined;
 
-        // Resolve a customer NAME to its CUSTNAME so callers don't need a separate lookup call.
+        // Only a unique exact identifier/reviewed alias may select a customer automatically.
         if (!customerId && params.customerName) {
-          const { value } = await searchForm<{ CUSTNAME: string; CUSTDES: string }>(client, {
-            form: 'CUSTOMERS',
-            query: params.customerName,
-            fields: ['CUSTDES', 'CUSTNAME'],
-            select: ['CUSTNAME', 'CUSTDES'],
-            top: 5,
+          const resolver = new EntityResolver(client, {
+            authorize: (kind) => entityResolutionAllowed(config, kind),
           });
-          if (value.length === 0) {
+          const context =
+            currentOperation() ??
+            createOperation('priority_list_invoices', {
+              ...(extra?.signal ? { signal: extra.signal } : {}),
+            });
+          const resolution = await resolver.resolveEntity(
+            { kind: 'customer', query: params.customerName, limit: 5 },
+            context,
+          );
+          const chosen = resolution.status === 'resolved' ? resolution.candidates[0] : undefined;
+          if (!chosen || typeof chosen.identity.keys.CUSTNAME !== 'string') {
             return textResult({
               invoices: [],
-              note: `No customer matched "${params.customerName}". Try priority_search_customers.`,
+              customerResolution: resolution,
+              note: 'Choose an exact customerId from verified candidates before requesting invoices. Incomplete absence does not prove that a customer does not exist.',
             });
           }
-          const wanted = params.customerName.trim();
-          const chosen = value.find((c) => String(c.CUSTDES).trim() === wanted) ?? value[0];
-          customerId = String(chosen.CUSTNAME);
-          resolvedCustomer = {
-            CUSTNAME: chosen.CUSTNAME,
-            CUSTDES: chosen.CUSTDES,
-            ...(value.length > 1
-              ? { otherMatches: value.filter((c) => c.CUSTNAME !== chosen.CUSTNAME) }
-              : {}),
-          };
+          customerId = chosen.identity.keys.CUSTNAME;
+          resolvedCustomer = { CUSTNAME: customerId, CUSTDES: chosen.displayName };
         }
 
         const qb = new ODataBuilder()
@@ -164,6 +166,7 @@ Returns unreconciled posted invoice signals; this does not prove remaining balan
         // is selectable but NOT filterable — Priority 500s ("Object reference not set") on
         // `IVRECONDATE eq null` — so we page the customer's invoices and filter client-side.
         const select = [...(AINVOICES?.defaultSelect ?? []), 'IVRECONDATE'];
+        const firstObservedAt = new Date().toISOString();
         const scan = await fetchAllPages<Record<string, unknown>>(
           (skip, top) =>
             client.list(
@@ -179,7 +182,12 @@ Returns unreconciled posted invoice signals; this does not prove remaining balan
                 .skip(skip)
                 .build(),
             ),
-          { pageSize: 200, maxRows: 5000, fetchNext: (link) => client.listNext(link) },
+          {
+            ...scanOperationOptions(),
+            pageSize: 200,
+            maxRows: 5000,
+            fetchNext: (link) => client.listNext(link),
+          },
         );
         const open = scan.rows.filter(
           (row) =>
@@ -200,6 +208,7 @@ Returns unreconciled posted invoice signals; this does not prove remaining balan
         return textResult({
           customerId: params.customerId,
           unpaidInvoices: result,
+          meta: scanObservation({ ...scan, complete }, firstObservedAt),
           count: result.length,
           scan: {
             ...scan,

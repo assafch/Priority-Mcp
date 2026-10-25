@@ -31,10 +31,16 @@ function acquireBackend(config: Config, logger: Logger) {
     backendPool.set(key, shared);
   }
   shared.references++;
+  let released = false;
   return {
     client: shared.client,
     release: () => {
-      if (--shared.references === 0) backendPool.delete(key);
+      if (released) return;
+      released = true;
+      if (--shared.references === 0) {
+        backendPool.delete(key);
+        shared.client.close();
+      }
     },
   };
 }

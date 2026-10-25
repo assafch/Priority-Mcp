@@ -23,3 +23,7 @@ An attachment row is a pointer, not proof that file bytes were uploaded or reada
 `scripts/composite-write.mjs` defaults to preview and honors read-only mode. It requires `--confirm` for supported writes. The finalization helper provides guidance only; it cannot silently force a document's final status. No production document should be used as a test fixture.
 
 Run `npm audit` and the full test/protocol suite after dependency changes. The October upgrade targets patched dependency versions; an audit count is a dated registry observation and not proof that every possible vulnerability is absent.
+
+## Read workflow and handle boundaries
+
+Composite reads check their own tool policy and every legacy dependency before access, regardless of profile visibility. Schema resources require `priority_get_entity_metadata`. Resolver candidates require current uncached exact reads before disclosure. Identifiers are not normalized as numbers. Result handles are opaque, process-boot/data/policy/query/generation-bound, expire after 15 minutes and have count/byte limits. They do not grant authority for writes. Reports expose source coverage separately from multi-observation consistency. See [rollout](performance-rollout.md).

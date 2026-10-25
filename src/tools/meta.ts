@@ -4,8 +4,9 @@ import { z } from 'zod';
 import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { csdlEntityNames, parseCsdl } from '../lib/csdl.js';
+import { csdlEntityNames } from '../lib/csdl.js';
 import { filterForms, probeForm } from '../lib/forms.js';
+import { knowledgeFor } from '../lib/schema-service.js';
 import { textResult } from '../lib/write-guard.js';
 
 /**
@@ -95,15 +96,19 @@ Returns all fields with their data types. Essential for building dynamic queries
 Example: priority_get_entity_schema({ entity: "CUSTOMERS" }) → shows all customer fields.`,
     {
       entity: z.string().min(1).describe('Entity name (e.g. "CUSTOMERS", "ORDERS")'),
+      refresh: z.boolean().default(false),
+      allowFullScan: z
+        .boolean()
+        .default(false)
+        .describe('Allow expensive full metadata only if targeted metadata is unsupported.'),
     },
     async (params) => {
       try {
-        const parsed = parseCsdl(await fetchMetadata(client), params.entity);
-        if (!parsed) {
-          return textResult({
-            error: `Entity "${params.entity}" not found. Use priority_list_entities({ contains: "${params.entity.slice(0, 6)}" }) to find the right name.`,
-          });
-        }
+        const { schema: parsed, evidence } = await knowledgeFor(client).schemas.get(params.entity, {
+          purpose: 'read',
+          force: params.refresh,
+          allowFullScan: params.allowFullScan,
+        });
         return textResult({
           entity: parsed.entity,
           title: parsed.title ?? null,
@@ -111,6 +116,7 @@ Example: priority_get_entity_schema({ entity: "CUSTOMERS" }) → shows all custo
           fieldCount: parsed.fieldCount,
           fields: parsed.fields,
           subforms: parsed.subforms,
+          meta: evidence,
         });
       } catch (err) {
         throw toMcpError(err);

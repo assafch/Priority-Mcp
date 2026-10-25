@@ -1,11 +1,16 @@
 import { type McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { toMcpError } from '../client/errors.js';
+import { PriorityError, toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
+import { toolAllowed } from '../lib/capabilities.js';
 import { connectionInfo } from '../lib/connection-info.js';
-import { parseCsdl } from '../lib/csdl.js';
+import { knowledgeFor } from '../lib/schema-service.js';
+import { toolHelp } from '../lib/tool-help.js';
+import { createOperation } from '../runtime/operation-context.js';
+import { registerResultResources } from './results.js';
 
 export function registerAllResources(server: McpServer, client: PriorityClient, config: Config) {
+  registerResultResources(server, client, config);
   // Schema resource TEMPLATE — get schema for any entity. Must be registered via ResourceTemplate:
   // passing the "priority://schema/{entity}" string directly registers a STATIC resource at that
   // literal URI, so {entity} never binds and every real read returns "resource not found".
@@ -16,20 +21,22 @@ export function registerAllResources(server: McpServer, client: PriorityClient, 
       description: 'JSON schema of a Priority entity — lists all fields and their types.',
       mimeType: 'application/json',
     },
-    async (uri, variables) => {
+    async (uri, variables, extra) => {
       try {
+        if (!toolAllowed(config, 'priority_get_entity_metadata'))
+          throw new PriorityError('Metadata dependency is blocked by tool policy.', 403);
         const raw = variables.entity;
         const entity = String(Array.isArray(raw) ? (raw[0] ?? '') : (raw ?? ''));
-        // GetMetadataFor(entity) returns just this form's CSDL (fast) — far cheaper than the full
-        // $metadata document, which can take 60–90s and exceed the client timeout.
-        const metadata = await client.getMetadataFor<unknown>(entity);
-        // Parses CSDL in either representation (Priority answers XML or JSON here).
-        const parsed = parseCsdl(metadata, entity);
-        const payload =
-          parsed ??
-          (typeof metadata === 'object' && metadata !== null
-            ? metadata
-            : { entity, fields: [], note: 'Metadata unavailable or could not be parsed.' });
+        const { schema, evidence } = await knowledgeFor(client).schemas.get(
+          entity,
+          { purpose: 'read' },
+          createOperation('schema-resource', {
+            workClass: 'discovery',
+            signal: extra.signal,
+            metrics: client.metrics,
+          }),
+        );
+        const payload = { ...schema, meta: evidence };
         return {
           contents: [
             {
@@ -42,6 +49,23 @@ export function registerAllResources(server: McpServer, client: PriorityClient, 
       } catch (err) {
         throw toMcpError(err);
       }
+    },
+  );
+
+  server.resource(
+    'tool-help',
+    new ResourceTemplate('priority://tools/{name}', { list: undefined }),
+    {
+      description:
+        'Detailed tool help. Text fallback: priority_get_capabilities with names and view=detail.',
+      mimeType: 'text/plain',
+    },
+    async (uri, variables) => {
+      const name = String(variables.name ?? '');
+      const help = toolHelp(server, name);
+      if (!toolAllowed(config, name) || help === undefined)
+        throw new PriorityError('Tool help unavailable under current policy.', 403);
+      return { contents: [{ uri: uri.href, mimeType: 'text/plain', text: help }] };
     },
   );
 

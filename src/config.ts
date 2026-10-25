@@ -86,10 +86,34 @@ const configSchema = z
       .optional()
       .transform((v) => (v ? v.split(',').map((s) => s.trim()) : [])),
     priorityReadOnly: z.string().optional().transform(parseReadOnly),
+    priorityCoalesceReads: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    priorityReportConcurrency: z.coerce.number().int().min(1).max(2).default(2),
+    priorityToolProfile: z.enum(['full', 'operations']).default('full'),
     priorityAllowedTools: z.string().optional().transform(parseToolList),
     priorityBlockedTools: z.string().optional().transform(parseToolList),
     cacheTtlSeconds: z.coerce.number().int().positive().default(60),
-    rateLimitPerMinute: z.coerce.number().int().positive().default(120),
+    cacheMaxBytes: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(32 * 1024 * 1024),
+    priorityRateScope: z.string().min(1).optional(),
+    priorityMaxConcurrency: z.coerce.number().int().positive().default(4),
+    priorityMaxPending: z.coerce.number().int().positive().default(100),
+    priorityMaxReadBodyBytes: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(16 * 1024 * 1024),
+    priorityMaxMetadataBodyBytes: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(32 * 1024 * 1024),
+    rateLimitPerMinute: z.coerce.number().int().positive().default(90),
     // Per-request timeout (ms). Bounds a hung Priority endpoint (undici would otherwise wait
     // ~5 min per attempt). Generous by default so heavy $expand windows still complete.
     requestTimeoutMs: z.coerce.number().int().positive().default(120000),
@@ -149,9 +173,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     priorityCustomPrefix: env.PRIORITY_CUSTOM_PREFIX,
     priorityCustomEntities: env.PRIORITY_CUSTOM_ENTITIES,
     priorityReadOnly: env.PRIORITY_READ_ONLY,
+    priorityCoalesceReads: env.PRIORITY_COALESCE_READS,
+    priorityReportConcurrency: env.PRIORITY_REPORT_CONCURRENCY,
+    priorityToolProfile: env.PRIORITY_TOOL_PROFILE,
     priorityAllowedTools: env.PRIORITY_ALLOWED_TOOLS,
     priorityBlockedTools: env.PRIORITY_BLOCKED_TOOLS,
     cacheTtlSeconds: env.CACHE_TTL_SECONDS,
+    cacheMaxBytes: env.CACHE_MAX_BYTES,
+    priorityRateScope: env.PRIORITY_RATE_SCOPE,
+    priorityMaxConcurrency: env.PRIORITY_MAX_CONCURRENCY,
+    priorityMaxPending: env.PRIORITY_MAX_PENDING,
+    priorityMaxReadBodyBytes: env.PRIORITY_MAX_READ_BODY_BYTES,
+    priorityMaxMetadataBodyBytes: env.PRIORITY_MAX_METADATA_BODY_BYTES,
     rateLimitPerMinute: env.RATE_LIMIT_PER_MINUTE,
     requestTimeoutMs: env.REQUEST_TIMEOUT_MS,
     logLevel: env.LOG_LEVEL,
@@ -168,5 +201,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     process.exit(1);
   }
 
+  if (result.data.rateLimitPerMinute > 90)
+    console.error(
+      '[config] RATE_LIMIT_PER_MINUTE exceeds the conservative process-local default; confirm the account limit and budget other integrations separately.',
+    );
   return result.data;
 }

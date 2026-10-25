@@ -8,6 +8,7 @@ import { getSchema } from '../lib/priority-schema.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
 import { searchForm } from '../lib/search.js';
 import { textResult, unavailableHere } from '../lib/write-guard.js';
+import { currentOperation } from '../runtime/operation-context.js';
 
 const LOGPART = getSchema('LOGPART');
 const PART_SEARCH_FIELDS = LOGPART?.searchFields ?? ['PARTDES', 'PARTNAME'];
@@ -23,6 +24,10 @@ export function registerProductTools(server: McpServer, client: PriorityClient, 
 Returns paginated product list. Use priority_get_product for full details.
 Filter by category, stock availability, or active status.`,
     {
+      cursor: z
+        .string()
+        .optional()
+        .describe('Server-owned search continuation; repeat the same search arguments.'),
       category: z.string().optional().describe('Filter by product family/category (FAMILYDES)'),
       active: z.boolean().optional().describe('Filter active products only'),
       search: z.string().optional().describe('Search in product description (PARTDES)'),
@@ -31,7 +36,7 @@ Filter by category, stock availability, or active status.`,
       orderBy: z.enum(['PARTNAME', 'PARTDES']).default('PARTNAME'),
       orderDir: z.enum(['asc', 'desc']).default('asc'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
         // Build the server-side filters that must apply in BOTH the plain-list and search paths.
         // These were previously dropped whenever `search` was set, silently returning inactive
@@ -50,6 +55,9 @@ Filter by category, stock availability, or active status.`,
         // Name/SKU search routes through the capability-aware helper (contains() → fallback).
         if (params.search) {
           const { value, meta } = await searchForm(client, {
+            signal: extra?.signal ?? currentOperation()?.signal,
+            deadlineAt: currentOperation()?.deadlineAt,
+            cursor: params.cursor,
             form: 'LOGPART',
             query: params.search,
             fields: PART_SEARCH_FIELDS,
@@ -122,12 +130,19 @@ Use PARTNAME (part/product number) as the key.`,
 
 Fuzzy search across product description and part number. Returns up to 20 matches by default.`,
     {
+      cursor: z
+        .string()
+        .optional()
+        .describe('Server-owned search continuation; repeat the same search arguments.'),
       query: z.string().min(1).describe('Search term'),
       top: z.number().int().min(1).max(100).default(20),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
         const { value, meta } = await searchForm(client, {
+          signal: extra?.signal ?? currentOperation()?.signal,
+          deadlineAt: currentOperation()?.deadlineAt,
+          cursor: params.cursor,
           form: 'LOGPART',
           query: params.query,
           fields: PART_SEARCH_FIELDS,

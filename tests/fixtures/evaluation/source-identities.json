@@ -1,0 +1,358 @@
+{
+  "schemaVersion": 1,
+  "version": "synthetic-source-identities-v1",
+  "authorization": "Root independent synthetic protocol-fixture enrichment ruling, 2026-10-25; base inputs and expected outcomes remain frozen.",
+  "effectiveInputsChanged": true,
+  "scope": "Explicit listed sales cases only; source identity and targeted schema only.",
+  "identitySemantics": [
+    "Literal opaque identities are declared separately from SKU, quantity, amount and array position.",
+    "Repeated observations of the same parent/physical fixture line reuse its declared identity.",
+    "Distinct physical fixture lines have distinct identities, even with equal economic fields.",
+    "No absent quantity, money, status, duty or flag is supplied."
+  ],
+  "schemas": {
+    "AINVOICES": {
+      "key": [
+        "IVNUM",
+        "DEBIT",
+        "IVTYPE"
+      ],
+      "fields": {
+        "IVNUM": "Edm.String",
+        "DEBIT": "Edm.String",
+        "IVTYPE": "Edm.String",
+        "IVDATE": "Edm.DateTimeOffset",
+        "STATDES": "Edm.String",
+        "DES": "Edm.String",
+        "TOTAL": "Edm.Decimal",
+        "CLOSED": "Edm.Boolean",
+        "CODE": "Edm.String"
+      }
+    },
+    "DOCUMENTS_D": {
+      "key": [
+        "DOCNO"
+      ],
+      "fields": {
+        "DOCNO": "Edm.String",
+        "CURDATE": "Edm.DateTimeOffset",
+        "STATDES": "Edm.String",
+        "IVALL": "Edm.String"
+      }
+    },
+    "AINVOICEITEMS_SUBFORM": {
+      "key": [
+        "SYNTHETIC_LINE_ID"
+      ],
+      "fields": {
+        "SYNTHETIC_LINE_ID": "Edm.String",
+        "PARTNAME": "Edm.String",
+        "TQUANT": "Edm.Decimal",
+        "QPRICE": "Edm.Decimal"
+      }
+    },
+    "TRANSORDER_D_SUBFORM": {
+      "key": [
+        "SYNTHETIC_LINE_ID"
+      ],
+      "fields": {
+        "SYNTHETIC_LINE_ID": "Edm.String",
+        "PARTNAME": "Edm.String",
+        "TQUANT": "Edm.Decimal",
+        "QPRICE": "Edm.Decimal",
+        "IVNUM": "Edm.String"
+      }
+    }
+  },
+  "cases": {
+    "workflow-report-001": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I1",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-c92bf"
+          }
+        ]
+      },
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I2",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-a580e"
+          }
+        ]
+      }
+    ],
+    "workflow-report-002": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I1",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-f41ce"
+          }
+        ]
+      },
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I2",
+          "DEBIT": "C",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-716ad"
+          }
+        ]
+      }
+    ],
+    "workflow-report-003": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "SAME",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-b8c63"
+          }
+        ]
+      },
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "SAME",
+          "DEBIT": "C",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-d6e12"
+          }
+        ]
+      }
+    ],
+    "workflow-report-004": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I1",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-43fca"
+          }
+        ]
+      }
+    ],
+    "workflow-report-006": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "DRAFT",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-e39ab"
+          }
+        ]
+      },
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "FINAL",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-0f6d2"
+          }
+        ]
+      }
+    ],
+    "workflow-report-007": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I1",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-897ae"
+          }
+        ]
+      },
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I2",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-c0b14"
+          }
+        ]
+      }
+    ],
+    "workflow-report-008": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I1",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-598f2"
+          }
+        ]
+      },
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I2",
+          "DEBIT": "C",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-a237d"
+          }
+        ]
+      }
+    ],
+    "workflow-report-009": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "JAN",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-2b8c6"
+          }
+        ]
+      },
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "FEB",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-e041a"
+          }
+        ]
+      }
+    ],
+    "workflow-report-010": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "I1",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-7c13b"
+          }
+        ]
+      },
+      {
+        "source": "DOCUMENTS_D",
+        "parentIdentity": {
+          "DOCNO": "D1"
+        },
+        "collection": "TRANSORDER_D_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-647fa"
+          },
+          {
+            "SYNTHETIC_LINE_ID": "sid-1bd87"
+          }
+        ]
+      }
+    ],
+    "workflow-report-021": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "CREDIT",
+          "DEBIT": "C",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-81ca9"
+          }
+        ]
+      }
+    ],
+    "workflow-report-022": [
+      {
+        "source": "AINVOICES",
+        "parentIdentity": {
+          "IVNUM": "BACK",
+          "DEBIT": "D",
+          "IVTYPE": "A"
+        },
+        "collection": "AINVOICEITEMS_SUBFORM",
+        "lineIdentities": [
+          {
+            "SYNTHETIC_LINE_ID": "sid-e7d5a"
+          }
+        ]
+      }
+    ]
+  }
+}

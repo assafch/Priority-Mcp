@@ -4,11 +4,11 @@ const rows = [...TOOL_DEFINITIONS].sort(
   (a, b) => a.domain.localeCompare(b.domain) || a.name.localeCompare(b.name),
 );
 const lines = [
-  '# Tool capabilities — 0.2.0',
+  '# Tool capabilities — unreleased faster/smarter update',
   '',
   'This catalog describes code, not current tenant permissions. Use `priority_get_capabilities` for policy and dated form-readability evidence; follow `nextSkip`. A successful form probe does not enable an unavailable handler or prove a write.',
   '',
-  `${rows.length} registered definitions. Existing tool names remain available subject to allow/block policy. Every tool has risk annotations and an object output schema; JSON text and structured content agree.`,
+  `${rows.length} registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.`,
   '',
   '| Tool | Domain | Mode | Implementation |',
   '| --- | --- | --- | --- |',
@@ -25,6 +25,8 @@ const lines = [
   '```json',
   '{"domain":"invoices","includeUnavailable":true,"refresh":false,"top":25,"skip":0}',
   '```',
+  '',
+  'Detailed tool help: `priority://tools/{name}` or `priority_get_capabilities` with `names` and `view:detail`. Typed resolver/query/workflow outputs carry evidence and completeness. See [performance rollout](performance-rollout.md).',
   '',
   'Call `priority_healthcheck` without arguments for local diagnostics, or set `checkBackend:true` for a read-only backend check. No diagnostic tool mutates ERP data.',
   '',

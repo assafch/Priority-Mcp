@@ -1,94 +1,49 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { toMcpError } from '../client/errors.js';
-import { PriorityError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
-import { dateRange, dateRangeFilter } from '../lib/dates.js';
-import { fetchAllPages } from '../lib/paginate.js';
-import { textResult } from '../lib/write-guard.js';
+import type { Config } from '../config.js';
+import {
+  handleBindingFor,
+  policyScopeFor,
+  queryHashFor,
+  resultHandles,
+} from '../lib/result-handles.js';
+import { MAX_RESULT_CHARS, boundedPayload } from '../lib/tool-result.js';
+import { createOperation, currentOperation } from '../runtime/operation-context.js';
+import {
+  type SalesParams,
+  type SalesState,
+  salesStateEvidence,
+} from '../services/reports/sales-aggregate.js';
+import { runSalesReport } from '../services/reports/sales-reader.js';
 
-/**
- * priority_product_sales_by_period
- *
- * Why this exists: on this installation the flat sales-line forms (SALESINVOICEITEMS,
- * ORDERITEMS) are NOT API-enabled ("לא ניתן להפעיל API למסך זה"), and OData here does NOT
- * support the `any()` collection operator — so you cannot filter invoices by the products on
- * their lines. The only way to get per-product quantities is to expand AINVOICEITEMS_SUBFORM
- * over a date range. A wide expand is heavy and the server times out ("terminated") past a few
- * dozen invoices, so this tool walks the range in adaptive windows: it starts at `windowDays`
- * and, on a timeout/5xx, halves the window and retries down to a single day. The aggregation
- * (half-month / month / week buckets per product) happens server-side, so one tool call replaces
- * dozens of manual chunked queries.
- *
- * Sources (deduplicated, no double counting):
- *  - AINVOICES (tax invoices, STATDES='סופית'), bucketed by IVDATE. Cancelled ('מבוטלת') and
- *    drafts ('טיוטא') are excluded by the status filter. Credit/return lines carry negative
- *    TQUANT and net correctly.
- *  - DOCUMENTS_D (delivery notes), bucketed by CURDATE, optional. A delivery line is added ONLY
- *    when its billed invoice (line.IVNUM) is NOT one of the AINVOICES we already counted — on
- *    this install delivery notes are billed via a separate SI invoice series that does not appear
- *    in AINVOICES, so those are genuine extra (export-channel) sales. Un-invoiced final delivery
- *    notes (IVNUM null) are counted and listed in `warnings` so you can spot superseded duplicates.
- */
-
-const PROD_LINE_SELECT = 'PARTNAME,TQUANT,QPRICE';
-
-/** Half-open day key 'YYYY-MM-DD' → bucket label. */
-function bucketOf(isoDate: string, mode: 'half-month' | 'month' | 'week'): string {
-  const [y, m, d] = isoDate.slice(0, 10).split('-').map(Number);
-  if (mode === 'month') return `${isoDate.slice(0, 7)}`;
-  if (mode === 'half-month') return `${isoDate.slice(0, 7)}-${d <= 15 ? 'H1' : 'H2'}`;
-  // week: ISO-ish week starting Monday, labelled by the Monday date.
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  const dow = (dt.getUTCDay() + 6) % 7; // 0 = Monday
-  dt.setUTCDate(dt.getUTCDate() - dow);
-  return dt.toISOString().slice(0, 10);
+/** Leave room for truthful post-format page counters, then serialize one consistent payload. */
+function formatDetail(data: Record<string, unknown>, offset: number) {
+  const payload = boundedPayload(data, MAX_RESULT_CHARS - 512, true);
+  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+  const meta = payload.meta as Record<string, unknown> | undefined;
+  const detail = meta?.detail as Record<string, unknown> | undefined;
+  if (detail) {
+    detail.returnedRows = rows.length;
+    detail.nextOffset =
+      rows.length && offset + rows.length < Number(detail.totalRows) ? offset + rows.length : null;
+    detail.outputComplete = offset + rows.length >= Number(detail.totalRows);
+    if (!rows.length && Number(detail.totalRows) > offset)
+      detail.fallbackUnavailable =
+        'A row exceeds the text budget; use the retained resource URI for complete detail.';
+  }
+  return {
+    structuredContent: payload,
+    content: [{ type: 'text' as const, text: JSON.stringify(payload, null, 2) }],
+  };
 }
 
-/** OData string literal with embedded quotes doubled. */
-function lit(v: string): string {
-  return `'${v.replace(/'/g, "''")}'`;
-}
-
-/** `PARTNAME eq 'A' or PARTNAME eq 'B' ...` over a field. */
-function orEq(field: string, values: string[]): string {
-  return values.map((v) => `${field} eq ${lit(v)}`).join(' or ');
-}
-
-/** Add days to a 'YYYY-MM-DD' and return 'YYYY-MM-DD'. */
-function addDays(iso: string, n: number): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() + n);
-  return dt.toISOString().slice(0, 10);
-}
-
-/** True for the transient server failures worth retrying with a smaller window. */
-function isTransient(err: unknown): boolean {
-  if (err instanceof PriorityError) return [408, 429, 500, 502, 503, 504].includes(err.statusCode);
-  // The MCP/OData layer surfaces gateway timeouts as a generic "terminated" Error.
-  return err instanceof Error && /terminat|timeout|socket|ECONNRESET/i.test(err.message);
-}
-
-type Line = { PARTNAME?: string; TQUANT?: number; QPRICE?: number; IVNUM?: string | null };
-type InvRow = {
-  IVNUM?: string;
-  DEBIT?: string;
-  IVTYPE?: string;
-  IVDATE?: string;
-  AINVOICEITEMS_SUBFORM?: Line[];
-  [key: string]: unknown;
-};
-type DocRow = {
-  DOCNO?: string;
-  CURDATE?: string;
-  STATDES?: string;
-  IVALL?: string | null;
-  TRANSORDER_D_SUBFORM?: Line[];
-  [key: string]: unknown;
-};
-
-export function registerSalesReportTools(server: McpServer, client: PriorityClient) {
+export function registerSalesReportTools(
+  server: McpServer,
+  client: PriorityClient,
+  config?: Config,
+) {
   server.tool(
     'priority_product_sales_by_period',
     `Quantity (or value) of one or more products sold, bucketed by period (half-month / month / week).
@@ -98,6 +53,25 @@ aggregates, so you never have to chunk AINVOICES expands by hand. Includes tax i
 (optionally) delivery notes, de-duplicated. Cancelled and draft invoices are excluded; returns/
 credits net automatically.`,
     {
+      resumeHandle: z
+        .string()
+        .optional()
+        .describe(
+          'Opaque handle from a previous identical report; replaces the last completed and missing windows.',
+        ),
+      detailOffset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'Read retained detail from this row offset without fetching ERP again; requires resumeHandle.',
+        ),
+      detailLimit: z.number().int().min(1).max(100).default(100),
+      fullRefresh: z
+        .boolean()
+        .default(false)
+        .describe('Discard retained observations and reread the entire query.'),
       deadlineMs: z
         .number()
         .int()
@@ -135,304 +109,154 @@ credits net automatically.`,
         .describe('Initial date-window size for expansion; auto-halves on server timeout'),
     },
     async (params, extra) => {
-      const reportAbort = new AbortController();
-      const signal = extra?.signal;
-      const abortReport = () => reportAbort.abort();
-      signal?.addEventListener('abort', abortReport, { once: true });
-      if (signal?.aborted) reportAbort.abort();
-      const deadline = Date.now() + (params.deadlineMs ?? 120000);
-      const deadlineTimer = setTimeout(abortReport, params.deadlineMs ?? 120000);
       try {
-        dateRange(params.fromDate, params.toDate); // validate before any backend request
-        const products = [...new Set(params.products)];
-        const partFilter = orEq('PARTNAME', products);
-        const lineExpand = `AINVOICEITEMS_SUBFORM($select=${PROD_LINE_SELECT};$filter=${partFilter})`;
-        class ReportStopped extends Error {}
-        const request = async <T>(run: (readSignal: AbortSignal) => Promise<T>): Promise<T> => {
-          if (reportAbort.signal.aborted || Date.now() >= deadline)
-            throw new ReportStopped(signal?.aborted ? 'cancelled' : 'deadline');
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          let abort: (() => void) | undefined;
-          try {
-            return await Promise.race([
-              run(reportAbort.signal),
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(
-                  () => reject(new ReportStopped('deadline')),
-                  Math.max(1, deadline - Date.now()),
-                );
-                abort = () => reject(new ReportStopped(signal?.aborted ? 'cancelled' : 'deadline'));
-                reportAbort.signal.addEventListener('abort', abort, { once: true });
-              }),
-            ]);
-          } finally {
-            if (timer) clearTimeout(timer);
-            if (abort) reportAbort.signal.removeEventListener('abort', abort);
-          }
-        };
-        const metricOf = (l: Line) =>
-          params.metric === 'value' ? Number(l.QPRICE ?? 0) : Number(l.TQUANT ?? 0);
-        const grid: Record<string, Record<string, number>> = {};
-        const addCell = (bkt: string, part: string, n: number) => {
-          let row = grid[bkt];
-          if (!row) {
-            row = {};
-            grid[bkt] = row;
-          }
-          row[part] = (row[part] ?? 0) + n;
-        };
-        const countedInvoices = new Set<string>();
-        const countedInvoiceNumbers = new Set<string>();
-        const warnings: string[] = [];
-        const missingWindows: { source: string; from: string; to: string; reason: string }[] = [];
-        const scans: {
-          source: string;
-          from: string;
-          to: string;
-          complete: boolean;
-          stopReason: string;
-          rows: number;
-          pages: number;
-          nextCursor?: unknown;
-        }[] = [];
-        let windowsQueried = 0;
-        let stopped = false;
-        let expandedLinesComplete = true;
-        const gap = (source: string, from: string, to: string, reason: string) => {
-          missingWindows.push({ source, from, to, reason });
-        };
-        const loadLines = async (row: InvRow | DocRow, field: string): Promise<Line[]> => {
-          const lines = [...((row[field] as Line[] | undefined) ?? [])];
-          let next = row[`${field}@odata.nextLink`] as string | undefined;
-          const seen = new Set<string>();
-          while (next) {
-            if (seen.has(next) || lines.length >= 20000) {
-              expandedLinesComplete = false;
-              warnings.push(
-                `Expanded ${field} lines incomplete: continuation loop or 20000-line cap.`,
-              );
-              break;
-            }
-            seen.add(next);
-            const continuation = next;
-            const page = await request((readSignal) =>
-              client.listNext<Line>(continuation, { signal: readSignal }),
-            );
-            const remaining = 20000 - lines.length;
-            lines.push(...page.value.slice(0, remaining));
-            if (page.value.length > remaining) {
-              expandedLinesComplete = false;
-              warnings.push(`Expanded ${field} lines incomplete: 20000-line cap.`);
-              break;
-            }
-            next = page['@odata.nextLink'];
-          }
-          return lines;
-        };
-        const fetchInvoiceWindow = async (
-          from: string,
-          to: string,
-          span: number,
-        ): Promise<void> => {
-          if (stopped) {
-            gap('AINVOICES', from, to, 'deadlineOrCancelled');
-            return;
-          }
-          try {
-            const filter = `${dateRangeFilter('IVDATE', from, to)} and STATDES eq ${lit('סופית')}`;
-            const scan = await fetchAllPages<InvRow>(
-              (skip, top) =>
-                request((readSignal) =>
-                  client.list(
-                    'AINVOICES',
-                    `?$select=IVNUM,DEBIT,IVTYPE,IVDATE&$filter=${encodeURIComponent(filter)}` +
-                      `&$expand=${encodeURIComponent(lineExpand)}&$orderby=IVDATE,IVNUM,DEBIT,IVTYPE&$top=${top}&$skip=${skip}`,
-                    { signal: readSignal },
-                  ),
-                ),
-              {
-                maxRows: 20000,
-                fetchNext: (link) =>
-                  request((readSignal) => client.listNext(link, { signal: readSignal })),
-                signal: reportAbort.signal,
-              },
-            );
-            // Finish nested reads before aggregation; splitting a failed window cannot double-count.
-            const expanded: { inv: InvRow; lines: Line[] }[] = [];
-            for (const inv of scan.rows)
-              expanded.push({ inv, lines: await loadLines(inv, 'AINVOICEITEMS_SUBFORM') });
-            windowsQueried++;
-            scans.push({
-              source: 'AINVOICES',
-              from,
-              to,
-              complete: scan.complete,
-              stopReason: scan.stopReason,
-              rows: scan.rows.length,
-              pages: scan.pages,
-              nextCursor: scan.nextCursor,
-            });
-            if (!scan.complete) gap('AINVOICES', from, to, scan.stopReason);
-            for (const { inv, lines } of expanded) {
-              const key = JSON.stringify([inv.IVNUM, inv.DEBIT, inv.IVTYPE]);
-              if (countedInvoices.has(key)) continue;
-              countedInvoices.add(key);
-              if (inv.IVNUM) countedInvoiceNumbers.add(inv.IVNUM);
-              const date = inv.IVDATE?.slice(0, 10);
-              if (!date) {
-                gap('AINVOICES', from, to, 'missingInvoiceDate');
-                continue;
-              }
-              const bkt = bucketOf(date, params.bucket);
-              for (const l of lines)
-                if (l.PARTNAME && products.includes(l.PARTNAME))
-                  addCell(bkt, l.PARTNAME, metricOf(l));
-            }
-          } catch (err) {
-            if (err instanceof ReportStopped || reportAbort.signal.aborted) {
-              stopped = true;
-              gap('AINVOICES', from, to, err instanceof Error ? err.message : 'cancelled');
-              return;
-            }
-            if (!isTransient(err)) throw err;
-            if (span > 1) {
-              const half = Math.floor(span / 2);
-              const mid = addDays(from, half);
-              await fetchInvoiceWindow(from, addDays(mid, -1), half);
-              await fetchInvoiceWindow(mid, to, span - half);
-            } else gap('AINVOICES', from, to, 'transientReadFailure');
-          }
-        };
-        for (let cur = params.fromDate; cur <= params.toDate; ) {
-          if (stopped) {
-            gap('AINVOICES', cur, params.toDate, 'deadlineOrCancelled');
-            break;
-          }
-          const end = addDays(cur, params.windowDays - 1);
-          const winEnd = end > params.toDate ? params.toDate : end;
-          const span =
-            (Date.parse(`${winEnd}T00:00:00Z`) - Date.parse(`${cur}T00:00:00Z`)) / 86400000 + 1;
-          await fetchInvoiceWindow(cur, winEnd, span);
-          cur = addDays(winEnd, 1);
-        }
-        let deliveryNotesAdded = 0;
-        if (params.includeDeliveryNotes) {
-          // Missing invoices make invoice-number deduplication unsafe; do not add potentially duplicated deliveries.
-          if (stopped || missingWindows.length)
-            gap('DOCUMENTS_D', params.fromDate, params.toDate, 'invoiceScanIncomplete');
-          else
-            try {
-              const filter = dateRangeFilter('CURDATE', params.fromDate, params.toDate);
-              const expand = `TRANSORDER_D_SUBFORM($select=${PROD_LINE_SELECT},IVNUM;$filter=${partFilter})`;
-              const scan = await fetchAllPages<DocRow>(
-                (skip, top) =>
-                  request((readSignal) =>
-                    client.list(
-                      'DOCUMENTS_D',
-                      `?$select=DOCNO,CURDATE,STATDES,IVALL&$filter=${encodeURIComponent(filter)}` +
-                        `&$expand=${encodeURIComponent(expand)}&$orderby=CURDATE,DOCNO&$top=${top}&$skip=${skip}`,
-                      { signal: readSignal },
-                    ),
-                  ),
-                {
-                  maxRows: 20000,
-                  fetchNext: (link) =>
-                    request((readSignal) => client.listNext(link, { signal: readSignal })),
-                  signal: reportAbort.signal,
-                },
-              );
-              windowsQueried++;
-              scans.push({
-                source: 'DOCUMENTS_D',
-                from: params.fromDate,
-                to: params.toDate,
-                complete: scan.complete,
-                stopReason: scan.stopReason,
-                rows: scan.rows.length,
-                pages: scan.pages,
-                nextCursor: scan.nextCursor,
-              });
-              if (!scan.complete)
-                gap('DOCUMENTS_D', params.fromDate, params.toDate, scan.stopReason);
-              for (const doc of scan.rows) {
-                if (doc.STATDES !== 'סופית') continue;
-                const date = doc.CURDATE?.slice(0, 10);
-                if (!date) {
-                  gap('DOCUMENTS_D', params.fromDate, params.toDate, 'missingDocumentDate');
-                  continue;
-                }
-                const bkt = bucketOf(date, params.bucket);
-                for (const l of await loadLines(doc, 'TRANSORDER_D_SUBFORM')) {
-                  if (
-                    !l.PARTNAME ||
-                    !products.includes(l.PARTNAME) ||
-                    (l.IVNUM && countedInvoiceNumbers.has(l.IVNUM))
-                  )
-                    continue;
-                  addCell(bkt, l.PARTNAME, metricOf(l));
-                  deliveryNotesAdded++;
-                }
-                if (!doc.IVALL || doc.IVALL === 'N')
-                  warnings.push(
-                    `Delivery note ${doc.DOCNO} (${date}) is not yet invoiced; verify it is not a superseded duplicate.`,
-                  );
-              }
-            } catch (err) {
-              if (
-                !(err instanceof ReportStopped) &&
-                !isTransient(err) &&
-                !reportAbort.signal.aborted
-              )
-                throw err;
-              gap(
-                'DOCUMENTS_D',
-                params.fromDate,
-                params.toDate,
-                err instanceof Error ? err.message : 'readFailure',
-              );
-            }
-        }
-        // --- Shape the grid into sorted rows + column/grand totals. ---
-        const periods = Object.keys(grid).sort();
-        const rows = periods.map((p) => {
-          const cells = Object.fromEntries(products.map((pn) => [pn, grid[p]?.[pn] ?? 0]));
-          const total = products.reduce((s, pn) => s + (grid[p]?.[pn] ?? 0), 0);
-          return { period: p, ...cells, total };
-        });
-        const columnTotals = Object.fromEntries(
-          products.map((pn) => [pn, periods.reduce((s, p) => s + (grid[p]?.[pn] ?? 0), 0)]),
-        );
-        const grandTotal = Object.values(columnTotals).reduce((s, n) => s + n, 0);
-
-        return textResult({
-          products,
-          range: { from: params.fromDate, to: params.toDate },
+        const query: SalesParams = {
+          products: [...new Set(params.products)],
+          fromDate: params.fromDate,
+          toDate: params.toDate,
           bucket: params.bucket,
           metric: params.metric,
-          rows,
-          columnTotals,
-          grandTotal,
-          meta: {
-            complete: missingWindows.length === 0 && expandedLinesComplete,
-            missingWindows,
-            scans,
-            expandedLinesComplete,
-            timezone:
-              'Date-only ranges use UTC day boundaries. Period buckets use the calendar date returned by Priority (IVDATE/CURDATE prefix), preserving source business dates.',
-            windowsQueried,
-            deliveryNotesIncluded: params.includeDeliveryNotes,
-            deliveryNoteLinesAdded: deliveryNotesAdded,
-            invoicesCounted: countedInvoices.size,
-            note: 'Tax invoices (STATDES=סופית) bucketed by IVDATE; delivery notes by CURDATE. Cancelled/draft excluded; returns net.',
-          },
-          warnings: [...new Set(warnings)],
+          includeDeliveryNotes: params.includeDeliveryNotes,
+          windowDays: params.windowDays,
+        };
+        const inherited =
+          currentOperation() ??
+          createOperation('priority_product_sales_by_period', { workClass: 'report' });
+        const ctx = {
+          ...inherited,
+          workClass: 'report' as const,
+          signal: extra?.signal
+            ? AbortSignal.any([inherited.signal, extra.signal])
+            : inherited.signal,
+          deadlineAt: Math.min(inherited.deadlineAt, Date.now() + (params.deadlineMs ?? 120000)),
+        };
+        const queryHash = queryHashFor(query);
+        const policy =
+          currentOperation()?.policyScope ??
+          (config ? policyScopeFor(config) : 'isolated-unconfigured-report');
+        const binding = handleBindingFor(client, policy, queryHash);
+        const previous = params.resumeHandle
+          ? resultHandles.get<SalesState>(params.resumeHandle, binding)
+          : undefined;
+        if (previous && previous.kind !== 'sales-report')
+          throw new Error('Handle is not a sales report; restart the query.');
+        ctx.signal.throwIfAborted();
+        if (params.detailOffset !== undefined) {
+          if (!previous || !params.resumeHandle)
+            throw new Error('Retained detail requires resumeHandle from the identical report.');
+          if (params.detailOffset > previous.rows.length)
+            throw new Error('Detail offset is outside retained rows.');
+          const totalRows = previous.rows.length;
+          return formatDetail(
+            {
+              rows: previous.rows.slice(
+                params.detailOffset,
+                params.detailOffset + (params.detailLimit ?? 100),
+              ),
+              meta: {
+                ...salesStateEvidence(previous),
+                consistency: 'multi-observation',
+                snapshotConsistent: false,
+                firstObservedAt: previous.firstObservedAt,
+                lastObservedAt: previous.lastObservedAt,
+                resumeHandle: params.resumeHandle,
+                queryHash,
+                detail: {
+                  totalRows,
+                  offset: params.detailOffset,
+                  returnedRows: 0,
+                  nextOffset: null,
+                  resourceUri: `priority://results/${params.resumeHandle}/${queryHash}/0`,
+                },
+              },
+            },
+            params.detailOffset,
+          );
+        }
+        const progress = extra as unknown as {
+          _meta?: { progressToken?: string | number };
+          sendNotification?: (notification: {
+            method: 'notifications/progress';
+            params: { progressToken: string | number; progress: number; total: number };
+          }) => Promise<void>;
+        };
+        const token = progress?._meta?.progressToken;
+        let lastSent = Number.NEGATIVE_INFINITY;
+        let lastCount = 0;
+        const output = await runSalesReport(client, query, {
+          concurrency: config?.priorityReportConcurrency ?? 2,
+          ctx,
+          previous,
+          fullRefresh: params.fullRefresh,
+          onProgress:
+            token !== undefined && progress.sendNotification
+              ? async (update) => {
+                  if (
+                    ctx.signal.aborted ||
+                    Date.now() >= ctx.deadlineAt ||
+                    update.completed <= lastCount ||
+                    Date.now() - lastSent < 2000
+                  )
+                    return;
+                  lastSent = Date.now();
+                  lastCount = update.completed;
+                  await progress.sendNotification?.({
+                    method: 'notifications/progress',
+                    params: {
+                      progressToken: token,
+                      progress: update.completed,
+                      total: update.total,
+                    },
+                  });
+                }
+              : undefined,
         });
-      } catch (err) {
-        throw toMcpError(err);
-      } finally {
-        clearTimeout(deadlineTimer);
-        signal?.removeEventListener('abort', abortReport);
-        reportAbort.abort();
+        const handle = resultHandles.create(binding, output.state);
+        if (params.resumeHandle && handle) resultHandles.remove(params.resumeHandle);
+        const resourceUri = handle ? `priority://results/${handle}/${queryHash}/0` : null;
+        const result = {
+          ...output.result,
+          rows: output.result.rows.slice(0, 100),
+          meta: {
+            ...output.result.meta,
+            resumable: Boolean(handle),
+            resumeHandle: handle,
+            queryHash,
+            detail: {
+              totalRows: output.result.rows.length,
+              returnedRows: Math.min(100, output.result.rows.length),
+              pageSize: 100,
+              nextPage: output.result.rows.length > 100 ? 1 : null,
+              resourceUri,
+            },
+            ...(!handle ? { restartRequired: true } : {}),
+          },
+          warnings: [
+            ...output.result.warnings,
+            ...(!handle
+              ? [
+                  'Retained report state exceeds the bounded handle budget; narrow the query or use fullRefresh. No resumable handle was created.',
+                ]
+              : []),
+          ],
+        };
+        const formatted = formatDetail(result, 0);
+        return handle && resourceUri
+          ? {
+              ...formatted,
+              content: [
+                ...formatted.content,
+                {
+                  type: 'resource_link' as const,
+                  uri: resourceUri,
+                  name: 'Report detail pages',
+                  mimeType: 'application/json',
+                },
+              ],
+            }
+          : formatted;
+      } catch (error) {
+        throw toMcpError(error);
       }
     },
   );

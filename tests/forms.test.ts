@@ -19,7 +19,7 @@ const apiFlagOff = () =>
 const absent = () => new PriorityError('', 404);
 
 function fakeClient(over: Partial<PriorityClient> = {}): PriorityClient {
-  return {
+  const client = {
     serviceRoot: vi.fn().mockResolvedValue({
       value: [
         { name: 'IMPFILES', kind: 'EntitySet', url: 'IMPFILES' },
@@ -32,6 +32,10 @@ function fakeClient(over: Partial<PriorityClient> = {}): PriorityClient {
     getMetadataFor: vi.fn(),
     ...over,
   } as unknown as PriorityClient;
+  client.request = vi.fn((_path: string) =>
+    client.getMetadataFor('F'),
+  ) as PriorityClient['request'];
+  return client;
 }
 
 beforeEach(() => _resetFormCaches());
@@ -172,7 +176,7 @@ describe('isApiFlagOffError', () => {
 
 describe('attachmentSubformOf', () => {
   const csdl = (navs: string[]) =>
-    `<EntityType Name="F"><Property Name="X" Type="Edm.String"/>${navs
+    `<EntityType Name="F"><Key><PropertyRef Name="X"/></Key><Property Name="X" Type="Edm.String"/>${navs
       .map((n) => `<NavigationProperty Name="${n}" Type="Collection(Priority.OData.Y)" />`)
       .join('')}</EntityType>`;
 
