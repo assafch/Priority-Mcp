@@ -5,7 +5,9 @@ import { recordMetric } from '../runtime/metrics.js';
 import { createOperation, currentOperation, withOperation } from '../runtime/operation-context.js';
 import type { EvidenceMeta, OperationContext } from '../runtime/types.js';
 import { CapabilityStore } from './capability-store.js';
-import { type CsdlEntity, parseCsdl } from './csdl.js';
+import { type CsdlEntity, csdlEntityNames, parseCsdl } from './csdl.js';
+const MAX_SCHEMA_BYTES = 16 * 1024 * 1024;
+type SchemaOptions = { purpose: 'read' | 'write'; allowFullScan?: boolean; force?: boolean };
 interface SchemaEntry {
   schema: CsdlEntity;
   at: number;
@@ -19,6 +21,7 @@ export class SchemaService {
   private entries = new Map<string, SchemaEntry>();
   private pending = new ReadCoalescer();
   private bytes = 0;
+  private fullDocument?: { raw: unknown; at: number; bytes: number };
   constructor(private client: PriorityClient) {}
   private result(entry: SchemaEntry, freshness: EvidenceMeta['freshness']): SchemaResult {
     return {
@@ -37,11 +40,7 @@ export class SchemaService {
       },
     };
   }
-  async get(
-    form: string,
-    options: { purpose: 'read' | 'write'; allowFullScan?: boolean; force?: boolean },
-    ctx?: OperationContext,
-  ): Promise<SchemaResult> {
+  async get(form: string, options: SchemaOptions, ctx?: OperationContext): Promise<SchemaResult> {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(form))
       throw new PriorityError('Invalid metadata form name.', 400);
     const operation = async () => {
@@ -77,6 +76,143 @@ export class SchemaService {
     };
     return ctx ? withOperation(ctx, operation) : operation();
   }
+  /** Priority GetMetadataFor supports top-level entities only. Resolve children by declared type. */
+  async getSubform(
+    parent: string,
+    subform: string,
+    options: SchemaOptions,
+    ctx?: OperationContext,
+  ): Promise<SchemaResult> {
+    if (![parent, subform].every((name) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))
+      throw new PriorityError('Invalid navigation schema name.', 400);
+    const subscriber =
+      ctx ?? currentOperation() ?? createOperation('schema', { workClass: 'discovery' });
+    return withOperation(subscriber, async () => {
+      subscriber.signal.throwIfAborted();
+      if (subscriber.deadlineAt <= Date.now())
+        throw new PriorityError('Schema deadline exceeded.', 408);
+      const owner = await this.get(
+        parent,
+        { purpose: options.purpose, force: options.force },
+        subscriber,
+      );
+      const target = owner.schema.subformTypes?.[subform];
+      if (
+        !owner.schema.subforms.includes(subform) ||
+        !target ||
+        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(target)
+      )
+        throw new PriorityError('The parent has no verified declared navigation target.', 422);
+      if (!options.allowFullScan)
+        throw new PriorityError('Subform schema requires explicit opt-in to full metadata.', 400);
+      const cacheKey = JSON.stringify(['navigation', parent, subform, target]);
+      const cached = this.entries.get(cacheKey);
+      const age = cached ? Date.now() - cached.at : Number.POSITIVE_INFINITY;
+      if (
+        cached &&
+        !options.force &&
+        (age < 3600000 || (options.purpose === 'read' && age < 86400000))
+      ) {
+        this.entries.delete(cacheKey);
+        this.entries.set(cacheKey, cached);
+        return this.result(cached, age < 3600000 ? 'cached' : 'stale');
+      }
+      let document = this.fullDocument;
+      let fetched = false;
+      if (!document || options.force || Date.now() - document.at >= 3600000) {
+        fetched = true;
+        document = await this.pending.run(
+          'full-navigation-metadata',
+          subscriber,
+          async (signal) => {
+            const shared = {
+              ...subscriber,
+              signal,
+              workClass: 'discovery' as const,
+              deadlineAt: Date.now() + 120000,
+            };
+            return withOperation(shared, async () => {
+              const raw = await this.client.request('$metadata', undefined, undefined, {
+                cache: false,
+                signal,
+              });
+              signal.throwIfAborted();
+              if (!csdlEntityNames(raw)?.length)
+                throw new PriorityError(
+                  'Full metadata did not contain an authoritative schema.',
+                  422,
+                );
+              const result = {
+                raw,
+                at: Date.now(),
+                bytes: Buffer.byteLength(typeof raw === 'string' ? raw : JSON.stringify(raw)),
+              };
+              this.fullDocument = undefined;
+              if (result.bytes <= MAX_SCHEMA_BYTES) {
+                this.evictFor(result.bytes);
+                this.fullDocument = result;
+              }
+              return result;
+            });
+          },
+        );
+      }
+      subscriber.signal.throwIfAborted();
+      if (subscriber.deadlineAt <= Date.now())
+        throw new PriorityError('Schema deadline exceeded.', 408);
+      const start = performance.now();
+      const fullParent = parseCsdl(document.raw, parent);
+      const schema = parseCsdl(document.raw, target);
+      recordMetric({ phase: 'parse', durationMs: performance.now() - start, form: parent });
+      if (
+        fullParent?.subformTypes?.[subform] !== target ||
+        !schema?.key.length ||
+        !schema.fields.length ||
+        schema.key.some((key) => !schema.fields.some((field) => field.name === key))
+      )
+        throw new PriorityError(
+          'Full schema did not verify the parent navigation and complete child key.',
+          422,
+        );
+      const entry = this.remember(
+        cacheKey,
+        schema,
+        Math.min(document.at, Date.parse(owner.evidence.observedAt ?? '') || document.at),
+      );
+      return this.result(
+        entry,
+        owner.evidence.freshness === 'stale' ? 'stale' : fetched ? 'live' : 'cached',
+      );
+    });
+  }
+  private evictFor(bytes: number): void {
+    while (
+      this.entries.size &&
+      (this.entries.size >= 256 ||
+        this.bytes + (this.fullDocument?.bytes ?? 0) + bytes > MAX_SCHEMA_BYTES)
+    ) {
+      const key = this.entries.keys().next().value;
+      if (key === undefined) break;
+      this.bytes -= this.entries.get(key)?.bytes ?? 0;
+      this.entries.delete(key);
+    }
+    if (this.bytes + (this.fullDocument?.bytes ?? 0) + bytes > MAX_SCHEMA_BYTES)
+      this.fullDocument = undefined;
+  }
+  private remember(key: string, schema: CsdlEntity, at: number): SchemaEntry {
+    const entry = { schema, at, bytes: Buffer.byteLength(JSON.stringify(schema)) };
+    const previous = this.entries.get(key);
+    if (previous) {
+      this.bytes -= previous.bytes;
+      this.entries.delete(key);
+    }
+    if (entry.bytes <= MAX_SCHEMA_BYTES) {
+      this.evictFor(entry.bytes);
+      this.entries.set(key, entry);
+      this.bytes += entry.bytes;
+    }
+    return entry;
+  }
   private async load(
     form: string,
     allowFullScan: boolean,
@@ -106,23 +242,7 @@ export class SchemaService {
     recordMetric({ phase: 'parse', durationMs: performance.now() - started, form });
     if (!schema || schema.fields.length === 0 || schema.key.length === 0)
       throw new PriorityError(`A complete keyed schema for ${form} could not be established.`, 422);
-    const entry = { schema, at: Date.now(), bytes: Buffer.byteLength(JSON.stringify(schema)) };
-    const previous = this.entries.get(form);
-    if (previous) {
-      this.bytes -= previous.bytes;
-      this.entries.delete(form);
-    }
-    if (entry.bytes <= 16 * 1024 * 1024) {
-      while (this.entries.size >= 256 || this.bytes + entry.bytes > 16 * 1024 * 1024) {
-        const key = this.entries.keys().next().value;
-        if (key === undefined) break;
-        const oldest = this.entries.get(key);
-        this.bytes -= oldest?.bytes ?? 0;
-        this.entries.delete(key);
-      }
-      this.entries.set(form, entry);
-      this.bytes += entry.bytes;
-    }
+    const entry = this.remember(form, schema, Date.now());
     return this.result(entry, 'live');
   }
 }

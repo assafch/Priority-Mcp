@@ -4,11 +4,15 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
+import { toolAllowed } from '../lib/capabilities.js';
 import { dateRange } from '../lib/dates.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
 import { verifyRecordCreate, verifyRecordUpdate } from '../lib/write-verification.js';
+import { createOperation, currentOperation } from '../runtime/operation-context.js';
+import { orderDiagnosis } from '../services/order-diagnosis.js';
+import { evidence } from '../services/read-policy.js';
 
 const ORDERS = getSchema('ORDERS');
 
@@ -108,23 +112,54 @@ Useful for warehouse/fulfillment teams to see what needs to go out.`,
 
   server.tool(
     'priority_get_order_shipment_status',
-    `Get shipment/tracking info for a specific order.
+    `Read ERP delivery/return document headers linked directly to an exact order.
 
-Returns shipping details including carrier, tracking number, and expected delivery date if available.`,
+Legacy shipments is an alias of erpDocuments. These headers and tracking labels do not prove carrier shipment or delivery. Multi-order linked-document coverage remains unverified.`,
     {
-      orderNumber: z.string().min(1).describe('The ORDNAME'),
+      orderNumber: z.string().min(1).describe('The exact ORDNAME'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
-        const qb = new ODataBuilder().expand('SHIPMENTS_SUBFORM');
-        const order = await client.get<Record<string, unknown>>(
-          'ORDERS',
-          params.orderNumber,
-          qb.build(),
+        const operation =
+          currentOperation() ??
+          createOperation('priority_get_order_shipment_status', {
+            ...(extra?.signal ? { signal: extra.signal } : {}),
+          });
+        if (
+          !toolAllowed(config, 'priority_get_order_shipment_status') ||
+          !toolAllowed(config, 'priority_get_order')
+        ) {
+          return textResult({
+            orderNumber: params.orderNumber,
+            deliveryVerified: false,
+            status: 'blocked',
+            meta: evidence(
+              operation,
+              'Priority:DOCUMENTS_D/exact-ORDNAME',
+              false,
+              [
+                'Order identity or shipment-source component is blocked by current tool policy; no source read was attempted.',
+              ],
+              false,
+            ),
+          });
+        }
+        const result = await orderDiagnosis(
+          {
+            orderNumber: params.orderNumber,
+            sections: ['shipments'],
+            budget: { maxRows: 100, maxPages: 8, deadlineAt: operation.deadlineAt },
+          },
+          { ...operation, client, config },
         );
+        const section = result.sections.shipments;
         return textResult({
           orderNumber: params.orderNumber,
-          shipments: order.SHIPMENTS_SUBFORM ?? [],
+          ...(section?.data && typeof section.data === 'object' ? section.data : {}),
+          deliveryVerified: false,
+          status: section?.status ?? 'incomplete',
+          identity: result.identity,
+          meta: section?.meta ?? result.meta,
         });
       } catch (err) {
         throw toMcpError(err);

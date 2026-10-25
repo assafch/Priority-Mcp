@@ -142,6 +142,7 @@ async function main() {
       }
       results.push({
         workload: index + 1,
+        requestedSamples: s.samples,
         cacheState: s.cache,
         ...summarizeSamples(times),
         backendAttempts: attempts - before,
@@ -155,6 +156,10 @@ async function main() {
   const fingerprint = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   const report = {
     mode: 'authorized-live-readonly',
+    complete:
+      results.length === scenarios.length &&
+      results.every((result) => result.samples === result.requestedSamples && !result.failures),
+    p95Sufficient: results.every((result) => result.sufficient),
     scenarioFingerprint: fingerprint(scenarios),
     effectiveRuntime: {
       rateLimitPerMinute: config.rateLimitPerMinute,
@@ -183,9 +188,13 @@ async function main() {
     `${JSON.stringify({
       output: resolve(output),
       backendAttempts: attempts,
-      complete: results.every((r) => r.sufficient && !r.failures),
+      complete: report.complete,
+      p95Sufficient: report.p95Sufficient,
     })}\n`,
   );
+  // Keep partial evidence on disk, but do not report a successful command for incomplete work.
+  // A fully collected smaller plan can succeed while correctly retaining p95Ms=null.
+  if (!report.complete) process.exitCode = 1;
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href)
   main().catch(() => {

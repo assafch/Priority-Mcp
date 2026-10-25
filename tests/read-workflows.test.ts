@@ -23,7 +23,11 @@ function fakeClient() {
     form === 'CUSTOMERS' ? { CUSTNAME: key, CUSTDES: 'Fixture customer' } : { ORDNAME: key },
   );
   const list = vi.fn(async () => ({ value: [] }));
-  return { client: { get, list } as unknown as PriorityClient, get, list };
+  const request = vi.fn(
+    async () =>
+      '<Schema><EntityType Name="DOCUMENTS_D"><Key><PropertyRef Name="DOCNO"/><PropertyRef Name="TYPE"/></Key><Property Name="DOCNO" Type="Edm.String"/><Property Name="TYPE" Type="Edm.String"/><Property Name="ORDNAME" Type="Edm.String"/><Property Name="AIRWAYBILL" Type="Edm.String"/></EntityType></Schema>',
+  );
+  return { client: { get, list, request } as unknown as PriorityClient, get, list, request };
 }
 const importRecord = () => ({
   IMPFNUM: 'IM1',
@@ -144,14 +148,22 @@ describe('evidence-backed bounded read workflows', () => {
   });
 
   it('distinguishes a shipment label from delivery and missing shipment source from verified empty', async () => {
-    const { client, get } = fakeClient();
-    get
-      .mockResolvedValueOnce({ ORDNAME: 'O1', ORDERITEMS_SUBFORM: [] })
-      .mockResolvedValueOnce({ ORDNAME: 'O1', SHIPMENTS_SUBFORM: [{ TRACKINGNUM: 'LABEL1' }] });
+    const { client, list } = fakeClient();
+    list.mockImplementation(async (_form, query) => ({
+      value: query?.includes('$skip=')
+        ? []
+        : [{ ORDNAME: 'O1', DOCNO: 'D1', TYPE: 'D', AIRWAYBILL: 'LABEL1' }],
+    }));
     const result = await orderDiagnosis({ orderNumber: 'O1', budget: budget() }, context(client));
-    expect(result.sections.shipments.data).toMatchObject({ deliveryVerified: false });
+    expect(result.sections.shipments.data).toMatchObject({
+      deliveryVerified: false,
+      erpDocuments: [{ AIRWAYBILL: 'LABEL1' }],
+      directLinkCoverageComplete: true,
+    });
+    expect(result.sections.shipments.status).toBe('incomplete');
     expect(result.sections.shipments.meta.warnings.join(' ')).toMatch(/carrier|delivery/i);
     const missing = fakeClient();
+    missing.request.mockRejectedValue(new Error('Source metadata unavailable'));
     const unknown = await orderDiagnosis(
       { orderNumber: 'O1', budget: budget() },
       context(missing.client),

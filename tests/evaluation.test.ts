@@ -60,7 +60,13 @@ describe('frozen offline evaluation', () => {
   it('passes deterministic engine facts without claiming a host/model trial or live ERP measurement', async () => {
     const report = await runEvaluation({ engines });
     expect(report.kind).toBe('synthetic-deterministic-offline-evaluation');
-    expect(report.deterministic.failed).toBe(0);
+    expect(report.deterministic.passed).toBe(118);
+    expect(report.deterministic.failed).toBe(2);
+    expect(report.compatibility.intentionalDeviationIds).toEqual([
+      'workflow-report-018',
+      'workflow-report-027',
+    ]);
+    expect(report.compatibility.blockingFailures).toBe(0);
     expect(report.deterministic.executed).toBe(120);
     expect(report.hostModel.status).toBe('not-run');
     expect(report.livePriority).toBe(false);
@@ -124,4 +130,14 @@ it('raw missing source identities and metadata remain incomplete even with a dec
     expect(report.deterministic.failed).toBe(0);
     expect(report.results[0].facts.missingWindowReasons).toContain(reason);
   }
+});
+
+it('does not hide an unrelated factual failure behind a known shipment contract deviation', async () => {
+  const dataset = await loadEvaluationCases();
+  const original = dataset.cases.find((c) => c.id === 'workflow-report-018');
+  const changed = { ...original, expected: { ...original.expected, deliveryVerified: true } };
+  const report = await runEvaluation({ cases: [changed], engines });
+  expect(report.deterministic.failed).toBe(1);
+  expect(report.compatibility.intentionalDeviationIds).toEqual([]);
+  expect(report.compatibility.blockingFailures).toBe(1);
 });

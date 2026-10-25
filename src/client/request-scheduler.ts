@@ -79,7 +79,8 @@ export class RequestScheduler {
       const deadline = Number.isFinite(ctx.deadlineAt)
         ? setTimeout(cancel, Math.max(0, ctx.deadlineAt - Date.now()))
         : undefined;
-      deadline?.unref?.();
+      // Pending work owns its deadline: a CLI may have no other referenced handles.
+      // Admission, cancellation and close all clear it through entry.cleanup().
       const entry: Pending = {
         ctx,
         heavy: heavy(ctx),
@@ -102,7 +103,8 @@ export class RequestScheduler {
     const availableAt = Math.max(this.pausedUntil, this.limiter.nextAllowedAt());
     if (availableAt > Date.now()) {
       this.timer = setTimeout(() => this.drain(), availableAt - Date.now());
-      this.timer.unref?.();
+      // Keep queued quota/pause work alive until it can settle. drain()/close() clear
+      // the wake timer as soon as the queue is empty; no idle keepalive is created.
       return;
     }
     const report =
