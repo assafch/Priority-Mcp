@@ -1,0 +1,191 @@
+{
+  "observedAt": "2026-10-25T10:45:42.913Z",
+  "readOnly": true,
+  "nonGetAttemptsSent": 0,
+  "attempts": [
+    {
+      "method": "GET",
+      "kind": "targeted-schema",
+      "at": "2026-10-25T10:44:34.360Z",
+      "status": 200,
+      "headerLatencyMs": 141.151541
+    },
+    {
+      "method": "GET",
+      "kind": "full-schema",
+      "at": "2026-10-25T10:44:36.367Z",
+      "status": 200,
+      "headerLatencyMs": 38888.850333
+    },
+    {
+      "method": "GET",
+      "kind": "targeted-schema",
+      "at": "2026-10-25T10:45:16.380Z",
+      "status": 200,
+      "headerLatencyMs": 740.8769580000007
+    },
+    {
+      "method": "GET",
+      "kind": "AINVOICES",
+      "at": "2026-10-25T10:45:18.383Z",
+      "status": 200,
+      "headerLatencyMs": 1190.585208000004
+    },
+    {
+      "method": "GET",
+      "kind": "AINVOICES",
+      "at": "2026-10-25T10:45:20.386Z",
+      "status": 200,
+      "headerLatencyMs": 974.2777499999938
+    },
+    {
+      "method": "GET",
+      "kind": "AINVOICES",
+      "at": "2026-10-25T10:45:22.389Z",
+      "status": 200,
+      "headerLatencyMs": 228.7046249999985
+    },
+    {
+      "method": "GET",
+      "kind": "AINVOICES",
+      "at": "2026-10-25T10:45:24.391Z",
+      "status": 200,
+      "headerLatencyMs": 1003.343667000001
+    },
+    {
+      "method": "GET",
+      "kind": "AINVOICES",
+      "at": "2026-10-25T10:45:26.395Z",
+      "status": 200,
+      "headerLatencyMs": 299.6250409999993
+    },
+    {
+      "method": "GET",
+      "kind": "AINVOICES",
+      "at": "2026-10-25T10:45:28.398Z",
+      "status": 200,
+      "headerLatencyMs": 491.0331660000011
+    },
+    {
+      "method": "GET",
+      "kind": "AINVOICES",
+      "at": "2026-10-25T10:45:30.400Z",
+      "status": 200,
+      "headerLatencyMs": 304.0006250000006
+    },
+    {
+      "method": "GET",
+      "kind": "DOCUMENTS_D",
+      "at": "2026-10-25T10:45:32.403Z",
+      "status": 200,
+      "headerLatencyMs": 1372.3746249999967
+    },
+    {
+      "method": "GET",
+      "kind": "ORDERS",
+      "at": "2026-10-25T10:45:34.406Z",
+      "status": 200,
+      "headerLatencyMs": 577.1632090000057
+    },
+    {
+      "method": "GET",
+      "kind": "ORDERS",
+      "at": "2026-10-25T10:45:36.407Z",
+      "status": 200,
+      "headerLatencyMs": 376.06287500000326
+    },
+    {
+      "method": "GET",
+      "kind": "DOCUMENTS_D",
+      "at": "2026-10-25T10:45:38.411Z",
+      "status": 200,
+      "headerLatencyMs": 854.6750000000029
+    },
+    {
+      "method": "GET",
+      "kind": "ORDERS",
+      "at": "2026-10-25T10:45:40.413Z",
+      "status": 200,
+      "headerLatencyMs": 531.218583000009
+    },
+    {
+      "method": "GET",
+      "kind": "DOCUMENTS_D",
+      "at": "2026-10-25T10:45:42.416Z",
+      "status": 200,
+      "headerLatencyMs": 494.5540000000037
+    }
+  ],
+  "cases": [
+    {
+      "name": "live-supported-parent-and-navigation-schemas",
+      "status": "passed",
+      "invoiceLineKeys": [
+        "KLINE"
+      ],
+      "deliveryLineKeys": [
+        "KLINE",
+        "TYPE"
+      ],
+      "fullSchemaReads": 1,
+      "requests": 3,
+      "elapsedMs": 42771.303709
+    },
+    {
+      "name": "warm-child-schema-no-extra-full-scan",
+      "status": "passed",
+      "networkReads": 0,
+      "requests": 0,
+      "elapsedMs": 0.6712919999990845
+    },
+    {
+      "name": "bounded-live-report-source",
+      "status": "passed",
+      "sourceFound": true,
+      "requests": 1,
+      "elapsedMs": 2443.7946250000023
+    },
+    {
+      "name": "independent-invoice-source-audit",
+      "status": "passed",
+      "invoiceRows": 7,
+      "matchedLines": 4,
+      "complete": true,
+      "requests": 2,
+      "elapsedMs": 3044.0294159999976
+    },
+    {
+      "name": "live-invoice-report-equals-independent-source",
+      "status": "passed",
+      "coverageComplete": true,
+      "sourceTotalsMatch": true,
+      "matchedSourceLines": 4,
+      "requests": 2,
+      "elapsedMs": 4079.3732909999962
+    },
+    {
+      "name": "live-invoice-and-delivery-report",
+      "status": "passed",
+      "coverageComplete": true,
+      "snapshotConsistent": false,
+      "missingWindows": 0,
+      "requests": 3,
+      "elapsedMs": 7089.340416999999
+    },
+    {
+      "name": "live-both-order-shipment-entrypoints",
+      "status": "passed",
+      "legacyReturnsDocuments": true,
+      "workflowStatus": "incomplete",
+      "directLinkCoverageComplete": true,
+      "overallComplete": false,
+      "deliveryVerified": false,
+      "requests": 5,
+      "elapsedMs": 9122.493583000003
+    }
+  ],
+  "notes": [
+    "Source values remain only in memory. Recorded comparisons reveal no business amounts or identities.",
+    "Report reference reads final invoices by exact source timestamp independently of report date-window query."
+  ]
+}

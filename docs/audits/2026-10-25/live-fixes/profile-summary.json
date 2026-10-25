@@ -1,0 +1,64 @@
+{
+  "backendAttempts": 50,
+  "completed": 50,
+  "allHttp200": true,
+  "nonGetAttemptsSent": 0,
+  "maxStartsPerRolling60Seconds": 30,
+  "headerP95Ms": 789.8220000000001,
+  "hostKeepalive": false,
+  "exitCode": 0,
+  "profile": {
+    "mode": "authorized-live-readonly",
+    "complete": true,
+    "p95Sufficient": true,
+    "scenarioFingerprint": "705f86fe1930ab5af31963fc09dc71d2d8124aafade02d13f1efbaecc488b583",
+    "effectiveRuntime": {
+      "rateLimitPerMinute": 30,
+      "maxConcurrency": 4,
+      "reportConcurrency": 2,
+      "coalesceReads": true,
+      "toolProfile": "full",
+      "readOnly": true
+    },
+    "observedAt": "2026-10-25T10:48:48.695Z",
+    "revision": "cc7694291b56c195950ea91d33b35fdf217d3d1b",
+    "limits": {
+      "totalRequests": 200,
+      "perMinute": 30
+    },
+    "backendAttempts": 50,
+    "results": [
+      {
+        "workload": 1,
+        "requestedSamples": 50,
+        "cacheState": "cold",
+        "samples": 50,
+        "sufficient": true,
+        "p50Ms": 1997.213499999998,
+        "p95Ms": 2085.8621249999997,
+        "backendAttempts": 50,
+        "failures": 0,
+        "workloadFingerprint": "9b3d0d88a2afa0cee1aad4fd3b5932fb7cf9870b50c51349e74ca54708900cfe"
+      },
+      {
+        "workload": 2,
+        "requestedSamples": 50,
+        "cacheState": "warm",
+        "samples": 50,
+        "sufficient": true,
+        "p50Ms": 0.013999999995576218,
+        "p95Ms": 0.04395800000929739,
+        "backendAttempts": 0,
+        "failures": 0,
+        "workloadFingerprint": "b3e3cb0f7d5945207a9ab8ed7db1ec3b15e43930af465ad715ef1116d93615f0"
+      }
+    ],
+    "hostModelTrials": {
+      "status": "not-run",
+      "tokens": null
+    },
+    "notes": [
+      "Timing includes local queue and retry latency. Warm cache samples are not independent ERP observations. No business values, identifiers, credentials or source URLs are retained."
+    ]
+  }
+}

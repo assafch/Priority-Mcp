@@ -1,0 +1,10 @@
+{
+  "kind": "offline-synthetic-docker",
+  "image": "sha256:246e7ba66b0183a9fa459d165c3259568846c9cc89b6cbbe5ec8cf4c7fc0b8d3",
+  "health": 200,
+  "anonymous": 401,
+  "initialize": 200,
+  "serverInfoVerified": true,
+  "erpCalls": 0,
+  "testContainerRemoved": true
+}
