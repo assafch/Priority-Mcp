@@ -94,10 +94,22 @@ export async function runSalesReport(
         .map((p) => `PARTNAME eq '${p.replace(/'/g, "''")}'`)
         .join(' or ');
       const requiredParent = invoice ? ['IVNUM', 'DEBIT', 'IVTYPE'] : ['DOCNO'];
-      const verifiedKeys = async (entity: string, required: string[] = []): Promise<string[]> => {
+      const verifiedKeys = async (
+        entity: string,
+        required: string[] = [],
+        parent?: string,
+      ): Promise<string[]> => {
         try {
-          // Use current targeted metadata, not tenant-blind historical key hints.
-          const schema = await knowledgeFor(client).schemas.get(entity, { purpose: 'write' }, ctx);
+          // Use current authoritative parent and declared navigation metadata.
+          const schemas = knowledgeFor(client).schemas;
+          const schema = parent
+            ? await schemas.getSubform(
+                parent,
+                entity,
+                { purpose: 'write', allowFullScan: true },
+                ctx,
+              )
+            : await schemas.get(entity, { purpose: 'write' }, ctx);
           const fields = new Set(schema.schema.fields.map((property) => property.name));
           const keys = [...new Set([...schema.schema.key, ...required])];
           return keys.length &&
@@ -110,7 +122,7 @@ export async function runSalesReport(
       };
       const [parentKeys, lineKeys] = await Promise.all([
         verifiedKeys(window.source, requiredParent),
-        verifiedKeys(field),
+        verifiedKeys(field, [], window.source),
       ]);
       const projection = [
         ...new Set([...lineKeys, 'PARTNAME', 'TQUANT', 'QPRICE', ...(!invoice ? ['IVNUM'] : [])]),
@@ -224,7 +236,7 @@ export async function runSalesReport(
         if (lines.length && !lineKeys.length) {
           invalid('unverifiedLineIdentity');
           contribution.warnings.push(
-            `Cannot establish full ${field} line identities from current targeted metadata; those rows were not summed.`,
+            `Cannot establish full ${field} line identities from current declared navigation metadata; those rows were not summed.`,
           );
         } else
           for (const line of lines) {

@@ -25,15 +25,7 @@ const invoice = (extra: Record<string, unknown> = {}) => ({
   AINVOICEITEMS_SUBFORM: [{ LINEKEY: 1, PARTNAME: 'P', TQUANT: 2 }],
   ...extra,
 });
-const schema = (entity: string) => {
-  const keys =
-    entity === 'AINVOICES'
-      ? ['IVNUM', 'DEBIT', 'IVTYPE']
-      : entity === 'DOCUMENTS_D'
-        ? ['DOCNO']
-        : ['LINEKEY'];
-  return `<Schema><EntityType Name="${entity}"><Key>${keys.map((name) => `<PropertyRef Name="${name}" />`).join('')}</Key>${[...keys, 'PARTNAME'].map((name) => `<Property Name="${name}" Type="Edm.String" />`).join('')}</EntityType></Schema>`;
-};
+import { reportMetadata } from './report-metadata-fixture.js';
 function backend(
   row: Record<string, unknown>,
   next: () => Promise<unknown> = async () => ({ value: [] }),
@@ -43,7 +35,7 @@ function backend(
   const client = {
     scopeId: 'fix-fixture',
     cacheGeneration: () => 0,
-    request: async (path: string) => schema(path.match(/entity='([^']+)'/)?.[1] ?? ''),
+    request: async (path: string) => reportMetadata(path),
     list: async (form: string, query: string) => {
       queries.push(query);
       if (form === 'DOCUMENTS_D') {

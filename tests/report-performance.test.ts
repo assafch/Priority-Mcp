@@ -11,16 +11,7 @@ import { runWindows } from '../src/services/reports/window-runner.js';
 import { registerFinanceTools } from '../src/tools/finance.js';
 import { registerInvoiceTools } from '../src/tools/invoices.js';
 import { registerSalesReportTools } from '../src/tools/sales-report.js';
-const lineMetadata = (path: string) => {
-  const entity = path.match(/entity='([^']+)'/)?.[1] ?? '';
-  const keys =
-    entity === 'AINVOICES'
-      ? ['IVNUM', 'DEBIT', 'IVTYPE']
-      : entity === 'DOCUMENTS_D'
-        ? ['DOCNO']
-        : ['LINEKEY'];
-  return `<Schema><EntityType Name="${entity}"><Key>${keys.map((name) => `<PropertyRef Name="${name}" />`).join('')}</Key>${[...keys, 'PARTNAME'].map((name) => `<Property Name="${name}" Type="Edm.String" />`).join('')}</EntityType></Schema>`;
-};
+import { reportMetadata as lineMetadata } from './report-metadata-fixture.js';
 const params = {
   products: ['P'],
   fromDate: '2026-01-01',
@@ -254,11 +245,18 @@ describe('bounded report windows and replacement resume', () => {
       calls++;
       await new Promise((resolve) => setTimeout(resolve, 1));
       const parsed = new URL(url);
-      if (parsed.pathname.includes('GetMetadataFor')) {
+      if (parsed.pathname.includes('GetMetadataFor') || parsed.pathname.endsWith('/$metadata')) {
         active--;
-        return new Response(lineMetadata(decodeURIComponent(parsed.pathname)), {
-          headers: { 'content-type': 'application/xml' },
-        });
+        return new Response(
+          lineMetadata(
+            parsed.pathname.endsWith('/$metadata')
+              ? '$metadata'
+              : decodeURIComponent(parsed.pathname),
+          ),
+          {
+            headers: { 'content-type': 'application/xml' },
+          },
+        );
       }
       const day = Number(
         (parsed.searchParams.get('$filter') ?? '').match(/2026-01-(\d\d)/)?.[1] ?? 1,
@@ -303,7 +301,8 @@ describe('bounded report windows and replacement resume', () => {
         expect(output.result.grandTotal).toBe(6);
         expect(output.result.meta.coverageComplete).toBe(true);
       }
-      expect(calls).toBe(454);
+      // 450 data requests, two targeted parent schemas and one shared full schema.
+      expect(calls).toBe(453);
       expect(max).toBe(2);
       expect(active).toBe(0);
     } finally {

@@ -43,6 +43,8 @@ export interface CsdlEntity {
   fieldCount: number;
   fields: CsdlField[];
   subforms: string[];
+  /** Navigation property -> declared entity type; a subform name need not equal its type. */
+  subformTypes?: Record<string, string>;
 }
 
 // ─────────────────────────────────────────────────────────────── CSDL JSON shape
@@ -91,11 +93,14 @@ function parseCsdlJsonEntity(doc: unknown, entity: string): CsdlEntity | null {
 
   const fields: CsdlField[] = [];
   const subforms: string[] = [];
+  const subformTypes: Record<string, string> = {};
   for (const [name, raw] of Object.entries(type)) {
     if (name.startsWith('$') || name.startsWith('@')) continue;
     if (!isJsonObject(raw)) continue;
     if (raw.$Kind === 'NavigationProperty') {
       subforms.push(name);
+      if (typeof raw.$Type === 'string')
+        subformTypes[name] = raw.$Type.slice(raw.$Type.lastIndexOf('.') + 1);
       continue;
     }
     if (raw.$Kind !== undefined) continue; // other member kinds (actions, terms…)
@@ -121,6 +126,7 @@ function parseCsdlJsonEntity(doc: unknown, entity: string): CsdlEntity | null {
     fieldCount: fields.length,
     fields,
     subforms,
+    subformTypes,
   };
 }
 
@@ -168,6 +174,22 @@ export function parseCsdlEntity(xml: string, entity: string): CsdlEntity | null 
   }
 
   const subforms = [...b.matchAll(/<NavigationProperty Name="([^"]+)"/g)].map((m) => m[1]);
-
-  return { entity, title: entityTitle, key, fieldCount: fields.length, fields, subforms };
+  const subformTypes: Record<string, string> = {};
+  for (const match of b.matchAll(/<NavigationProperty\s+([^>]+)>/g)) {
+    const name = match[1].match(/Name="([^"]+)"/)?.[1];
+    const rawType = match[1].match(/Type="([^"]+)"/)?.[1];
+    if (name && rawType) {
+      const type = rawType.replace(/^Collection\((.*)\)$/, '$1');
+      subformTypes[name] = type.slice(type.lastIndexOf('.') + 1);
+    }
+  }
+  return {
+    entity,
+    title: entityTitle,
+    key,
+    fieldCount: fields.length,
+    fields,
+    subforms,
+    subformTypes,
+  };
 }

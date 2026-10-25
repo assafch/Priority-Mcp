@@ -1,6 +1,7 @@
 import { ODataBuilder } from '../client/odata-builder.js';
 import { withOperation } from '../runtime/operation-context.js';
 import type { ReadBudget } from '../runtime/types.js';
+import { readOrderShipmentSources } from './order-shipments.js';
 import {
   type ReadWorkflowContext,
   type SectionData,
@@ -49,18 +50,27 @@ export async function orderDiagnosis(input: OrderDiagnosisInput, context: ReadWo
           ctx,
           section === 'lines'
             ? 'Priority:ORDERS/ORDERITEMS_SUBFORM'
-            : 'Priority:ORDERS/SHIPMENTS_SUBFORM',
+            : 'Priority:DOCUMENTS_D/exact-ORDNAME',
           'Order identity was not verified; no dependent read was attempted.',
         );
       return finishWorkflow(ctx, 'order-diagnosis', null, sections);
     }
     await Promise.all(
       requested.map(async (section) => {
-        const lines = section === 'lines';
-        const subform = lines ? 'ORDERITEMS_SUBFORM' : 'SHIPMENTS_SUBFORM';
+        if (section === 'shipments') {
+          sections.shipments = await readSection(
+            ctx,
+            'priority_get_order_shipment_status',
+            'Priority:DOCUMENTS_D/exact-ORDNAME',
+            () =>
+              readOrderShipmentSources({ form: 'ORDERS', keys: { ORDNAME: key } }, ctx, session),
+          );
+          return;
+        }
+        const subform = 'ORDERITEMS_SUBFORM';
         sections[section] = await readSection(
           ctx,
-          lines ? 'priority_get_order' : 'priority_get_order_shipment_status',
+          'priority_get_order',
           `Priority:ORDERS/${subform}`,
           async () =>
             session.read<SectionData>(25, async (limit) => {
@@ -72,11 +82,6 @@ export async function orderDiagnosis(input: OrderDiagnosisInput, context: ReadWo
               );
               if (record.ORDNAME !== key)
                 throw new Error('Order subform source identity mismatch.');
-              const warnings = lines
-                ? []
-                : [
-                    'ERP shipment/tracking labels are not carrier delivery proof; delivery remains unverified without direct carrier evidence.',
-                  ];
               const source = record[subform];
               if (
                 !Array.isArray(source) ||
@@ -85,11 +90,9 @@ export async function orderDiagnosis(input: OrderDiagnosisInput, context: ReadWo
                 return {
                   rows: Array.isArray(source) ? Math.min(source.length, limit) : 0,
                   data: {
-                    ...(lines ? {} : { data: { deliveryVerified: false } }),
                     complete: false,
                     warnings: [
-                      ...warnings,
-                      `${lines ? 'Order-line' : 'Shipment'} subform was absent or malformed; no verified empty list is available.`,
+                      'Order-line subform was absent or malformed; no verified empty list is available.',
                     ],
                   },
                 };
@@ -98,12 +101,9 @@ export async function orderDiagnosis(input: OrderDiagnosisInput, context: ReadWo
               return {
                 rows: rows.length,
                 data: {
-                  data: lines
-                    ? { orderNumber: key, rows, returned: rows.length }
-                    : { shipments: rows, deliveryVerified: false },
+                  data: { orderNumber: key, rows, returned: rows.length },
                   complete,
                   warnings: [
-                    ...warnings,
                     ...(complete
                       ? []
                       : [

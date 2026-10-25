@@ -9,6 +9,7 @@ import { registerFinanceTools } from '../src/tools/finance.js';
 import { registerInvoiceTools } from '../src/tools/invoices.js';
 import { registerPurchaseOrderTools } from '../src/tools/purchase-orders.js';
 import { registerSalesReportTools } from '../src/tools/sales-report.js';
+import { reportMetadata } from './report-metadata-fixture.js';
 
 function harness(
   register: (server: McpServer, client: PriorityClient) => void,
@@ -29,16 +30,7 @@ function harness(
     {
       list,
       listNext,
-      request: async (path: string) => {
-        const entity = path.match(/entity='([^']+)'/)?.[1] ?? '';
-        const keys =
-          entity === 'AINVOICES'
-            ? ['IVNUM', 'DEBIT', 'IVTYPE']
-            : entity === 'DOCUMENTS_D'
-              ? ['DOCNO']
-              : ['LINEKEY'];
-        return `<Schema><EntityType Name="${entity}"><Key>${keys.map((name) => `<PropertyRef Name="${name}" />`).join('')}</Key>${[...keys, 'PARTNAME'].map((name) => `<Property Name="${name}" Type="Edm.String" />`).join('')}</EntityType></Schema>`;
-      },
+      request: async (path: string) => reportMetadata(path),
     } as unknown as PriorityClient,
   );
   return async (
