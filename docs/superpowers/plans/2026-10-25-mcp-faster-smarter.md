@@ -10,7 +10,7 @@
 
 **Spec:** [Design and source evidence](../specs/2026-10-25-mcp-faster-smarter-design.md). Baseline commit: `29f8959`, release 0.2.0.
 
-**Execution status (2026-10-25):** Tasks 1–9 and the offline portion of Task 10 implemented and independently reviewed. Final clean-revision benchmark/evaluation recording is in progress. Host evaluation, live pilot and activation remain unchecked. [Verification record](../../audits/2026-10-25/faster-smarter-verification.md).
+**Execution status (2026-10-25):** Tasks 1–9 and the offline portion of Task 10 implemented and independently reviewed. Final clean-revision benchmark: 9 workloads × 50 samples; engine evaluation: 120/120 with the disclosed source-identity sidecar. Host evaluation, live pilot and activation remain unchecked. [Verification record](../../audits/2026-10-25/faster-smarter-verification.md).
 
 ## תקציר מעשי
 
