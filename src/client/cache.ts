@@ -7,6 +7,7 @@ interface CacheEntry<T> {
  * Simple in-memory LRU cache with TTL.
  */
 export class Cache {
+  private epoch = 0;
   private store = new Map<string, CacheEntry<unknown>>();
 
   constructor(
@@ -27,7 +28,13 @@ export class Cache {
     return entry.value as T;
   }
 
-  set<T>(key: string, value: T): void {
+  /** Generation changes even when the invalidated entry has not finished loading yet. */
+  generation(): number {
+    return this.epoch;
+  }
+
+  set<T>(key: string, value: T, generation = this.epoch): void {
+    if (generation !== this.epoch) return;
     if (this.store.size >= this.maxEntries) {
       // Evict oldest (first key)
       const firstKey = this.store.keys().next().value;
@@ -37,6 +44,7 @@ export class Cache {
   }
 
   invalidate(pattern?: string): void {
+    this.epoch++;
     if (!pattern) {
       this.store.clear();
       return;

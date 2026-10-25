@@ -26,15 +26,23 @@ export interface ExposedForm {
 const FORM_LIST_TTL_MS = 15 * 60 * 1000;
 const PROBE_TTL_MS = 5 * 60 * 1000;
 
-let formCache: { at: number; forms: ExposedForm[] } | undefined;
-let inFlight: Promise<ExposedForm[]> | undefined;
-const probeCache = new Map<string, { at: number; probe: FormProbe }>();
-
-/** Test hook: drop every memoized discovery result. */
+interface DiscoveryCache {
+  forms?: { at: number; forms: ExposedForm[] };
+  inFlight?: Promise<ExposedForm[]>;
+  probes: Map<string, { at: number; probe: FormProbe }>;
+}
+let caches = new WeakMap<PriorityClient, DiscoveryCache>();
+function cacheFor(client: PriorityClient): DiscoveryCache {
+  let cache = caches.get(client);
+  if (!cache) {
+    cache = { probes: new Map() };
+    caches.set(client, cache);
+  }
+  return cache;
+}
+/** Clear memoized discovery; cache ownership remains per authenticated client. */
 export function _resetFormCaches(): void {
-  formCache = undefined;
-  inFlight = undefined;
-  probeCache.clear();
+  caches = new WeakMap();
 }
 
 /**
@@ -43,27 +51,30 @@ export function _resetFormCaches(): void {
  * stampede would be brutal).
  */
 export async function listExposedForms(client: PriorityClient): Promise<ExposedForm[]> {
+  const cache = cacheFor(client);
+  const formCache = cache.forms;
   if (formCache && Date.now() - formCache.at < FORM_LIST_TTL_MS) return formCache.forms;
-  if (inFlight) return inFlight;
-  inFlight = (async () => {
+  if (cache.inFlight) return cache.inFlight;
+  cache.inFlight = (async () => {
     const doc = await client.serviceRoot<{ value?: Array<Record<string, unknown>> }>();
     const forms = (doc.value ?? []).map((f) => ({
       name: String(f.name ?? f.url ?? ''),
       kind: f.kind === undefined ? undefined : String(f.kind),
       url: f.url === undefined ? undefined : String(f.url),
     }));
-    formCache = { at: Date.now(), forms };
+    cache.forms = { at: Date.now(), forms };
     return forms;
   })();
   try {
-    return await inFlight;
+    return await cache.inFlight;
   } finally {
-    inFlight = undefined;
+    cache.inFlight = undefined;
   }
 }
 
 /** The cached form list if we already have one — never triggers the slow fetch. */
-export function cachedExposedForms(): ExposedForm[] | undefined {
+export function cachedExposedForms(client: PriorityClient): ExposedForm[] | undefined {
+  const formCache = cacheFor(client).forms;
   return formCache && Date.now() - formCache.at < FORM_LIST_TTL_MS ? formCache.forms : undefined;
 }
 
@@ -131,7 +142,9 @@ export async function probeForm(
   form: string,
   query = '?$top=1',
 ): Promise<FormProbe> {
-  const cached = probeCache.get(form);
+  const probeCache = cacheFor(client).probes;
+  const cacheKey = `${form}|${query}`;
+  const cached = probeCache.get(cacheKey);
   if (cached && Date.now() - cached.at < PROBE_TTL_MS) return cached.probe;
 
   let probe: FormProbe;
@@ -165,7 +178,7 @@ export async function probeForm(
       };
     }
   }
-  probeCache.set(form, { at: Date.now(), probe });
+  probeCache.set(cacheKey, { at: Date.now(), probe });
   return probe;
 }
 

@@ -1,18 +1,23 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { PriorityClient } from './client/priority-client.js';
 import type { Config } from './config.js';
+import { packageVersion } from './lib/connection-info.js';
 import type { Logger } from './logger.js';
 import { registerAllPrompts } from './prompts/index.js';
 import { registerAllResources } from './resources/index.js';
 import { registerAllTools } from './tools/index.js';
 
-export function createServer(config: Config, logger: Logger): McpServer {
+export function createServer(
+  config: Config,
+  logger: Logger,
+  sharedClient?: PriorityClient,
+): McpServer {
   const server = new McpServer({
     name: 'priority-mcp-server',
-    version: '0.1.0',
+    version: packageVersion,
   });
 
-  const client = new PriorityClient(config, logger);
+  const client = sharedClient ?? new PriorityClient(config, logger);
 
   registerAllTools(server, client, config);
   registerAllResources(server, client, config);

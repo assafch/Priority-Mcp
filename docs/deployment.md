@@ -1,99 +1,40 @@
-# Deployment Guide
+# Run and upgrade Priority MCP
 
-## Local (stdio)
+Requires **Node 22.13+**. Version 0.2.0 preserves stdio and session-based Streamable HTTP; use the protocol negotiated by the installed SDK. No live service restart or deployment is performed by the local update.
 
-The default transport. Used by Claude Desktop, Claude Code, Cursor, and Windsurf.
+## Local stdio
 
-```bash
-npx priority-mcp-server
+```sh
+npm ci --ignore-scripts
+npm run build
+npm test
+npm run test:mcp
+node --env-file=.env dist/index.js
 ```
 
-Or install globally:
+The environment file must supply either `PRIORITY_SERVICE_ROOT`, or `PRIORITY_BASE_URL` (through the `.ini` segment) plus company, or `PRIORITY_API_URL` (through `/odata/Priority`) plus environment and company. Precedence is in that order. Authentication prefers `PRIORITY_PAT`; the documented classic and legacy PAT forms also work. Read-only is on by default.
 
-```bash
-npm install -g priority-mcp-server
-priority-mcp-server
+## Docker HTTP
+
+Prepare a private `.env` with the connection/authentication and a strong `MCP_HTTP_AUTH_TOKEN`; keep `PRIORITY_READ_ONLY=true` for verification.
+
+```sh
+docker build -t priority-mcp-server:0.2.0 .
+docker run --rm -p 127.0.0.1:3000:3000 --env-file .env \
+  -e MCP_TRANSPORT=http -e MCP_HTTP_HOST=0.0.0.0 \
+  priority-mcp-server:0.2.0
 ```
 
-Required env vars must be set before running. See the [config reference](../README.md#configuration).
+Container binding must be `0.0.0.0` for port forwarding; host publishing above stays loopback. Non-loopback binding without the token fails closed. For remote clients use a private/authenticated TLS ingress and explicitly allowed browser origins. Do not assume a platform's port variable is read: set `MCP_HTTP_PORT` yourself. Session idle lifetime is 30 minutes and concurrent session count is capped at 100.
 
-## Docker
+`GET /health` checks process liveness only. Call `priority_healthcheck({checkBackend:true})` for an explicit read-only backend probe. `priority_get_capabilities({refresh:true,domain:"invoices"})` checks the forms on that page; it does not prove write permissions or procedure execution.
 
-```bash
-# Build
-docker build -t priority-mcp-server .
+## Upgrade and rollback
 
-# Run (HTTP mode)
-docker run -p 3000:3000 \
-  -e PRIORITY_API_URL=https://your-server.com/odata/Priority/tabula.ini \
-  -e PRIORITY_ENVIRONMENT=wlnd \
-  -e PRIORITY_COMPANY=demodata \
-  -e PRIORITY_USERNAME=apiuser \
-  -e PRIORITY_PASSWORD=secret \
-  -e MCP_TRANSPORT=http \
-  priority-mcp-server
-```
+1. Keep the previous built artifact, package lock and private configuration available locally.
+2. Run clean install, unit tests, build, lint, stdio/HTTP protocol checks and dependency audit.
+3. Restart only the intended MCP host once deployment is authorized. Confirm the advertised version, policy and tool count, then perform read-only smoke checks.
+4. Validate new mutations only in an authorized test company/document and record readback separately.
+5. For a software rollback restore the previous artifact/lock/config and restart that host. This does not reverse ERP transactions.
 
-Or use an env file:
-
-```bash
-docker run -p 3000:3000 --env-file .env priority-mcp-server
-```
-
-The Docker image uses Google's distroless Node.js base for a minimal attack surface.
-
-## Google Cloud Run
-
-```bash
-# Build and push to Artifact Registry
-gcloud builds submit --tag gcr.io/YOUR_PROJECT/priority-mcp-server
-
-# Deploy
-gcloud run deploy priority-mcp-server \
-  --image gcr.io/YOUR_PROJECT/priority-mcp-server \
-  --platform managed \
-  --region us-central1 \
-  --port 3000 \
-  --set-env-vars="MCP_TRANSPORT=http" \
-  --set-env-vars="PRIORITY_API_URL=https://your-server.com/odata/Priority/tabula.ini" \
-  --set-env-vars="PRIORITY_ENVIRONMENT=wlnd" \
-  --set-env-vars="PRIORITY_COMPANY=demodata" \
-  --update-secrets="PRIORITY_USERNAME=priority-username:latest,PRIORITY_PASSWORD=priority-password:latest" \
-  --no-allow-unauthenticated
-```
-
-Use `--no-allow-unauthenticated` and Cloud IAM to control access. Store credentials in Secret Manager.
-
-## Railway
-
-1. Connect your GitHub repository in the [Railway dashboard](https://railway.app).
-2. Set environment variables in the Railway service settings:
-   - All `PRIORITY_*` vars
-   - `MCP_TRANSPORT=http`
-   - `MCP_HTTP_PORT=3000` (Railway sets `PORT` automatically, but this server uses `MCP_HTTP_PORT`)
-3. Railway will auto-detect the Dockerfile and deploy.
-
-Alternatively, deploy directly:
-
-```bash
-railway init
-railway up
-```
-
-## Environment File Template
-
-Create a `.env` file (never commit this):
-
-```env
-PRIORITY_API_URL=https://your-priority-server.com/odata/Priority/tabula.ini
-PRIORITY_ENVIRONMENT=wlnd
-PRIORITY_COMPANY=demodata
-PRIORITY_USERNAME=apiuser
-PRIORITY_PASSWORD=your-password
-PRIORITY_LANGUAGE=EN
-PRIORITY_READ_ONLY=true
-CACHE_TTL_SECONDS=60
-RATE_LIMIT_PER_MINUTE=120
-LOG_LEVEL=info
-MCP_TRANSPORT=stdio
-```
+Cloud Run/Railway or other deployments require explicit host, port, token and TLS/ingress configuration. No public deployment is implied by these examples.

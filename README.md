@@ -8,13 +8,13 @@
 
 <p align="center">
   <strong>Connect AI assistants to Priority ERP</strong><br/>
-  102 tools (8 generic building blocks + 94 domain tools) &middot; 3 resources &middot; 5 workflow prompts
+  105 tools (8 generic building blocks + 94 domain tools) &middot; 3 resources &middot; 5 workflow prompts
 </p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg" alt="Node 22+" /></a>
-  <a href="#tools-102"><img src="https://img.shields.io/badge/tools-102-blue.svg" alt="102 tools" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg" alt="Node 22.13+" /></a>
+  <a href="#tools-105"><img src="https://img.shields.io/badge/tools-105-blue.svg" alt="105 tools" /></a>
   <a href="#mcp-prompts-5"><img src="https://img.shields.io/badge/prompts-5-purple.svg" alt="5 prompts" /></a>
 </p>
 
@@ -22,7 +22,7 @@
   <a href="#-quick-start">Quick Start</a> &bull;
   <a href="#-setup-recipes">Setup Recipes</a> &bull;
   <a href="#%EF%B8%8F-configuration">Configuration</a> &bull;
-  <a href="#-tools-72">Tools</a> &bull;
+  <a href="#tools-105">Tools</a> &bull;
   <a href="#-deployment">Deployment</a> &bull;
   <a href="#-priority-setup">Priority Setup</a>
 </p>
@@ -77,8 +77,8 @@ The server binds to loopback only. [Hebrew runbook and test-company gaps](docs/w
 export PRIORITY_API_URL="https://your-server.com/odata/Priority"
 export PRIORITY_ENVIRONMENT="tabula.ini"   # the system .ini segment (almost always tabula.ini)
 export PRIORITY_COMPANY="demodata"
-export PRIORITY_USERNAME="apiuser"          # PAT installs: use the PAT token here
-export PRIORITY_PASSWORD="your-password"    # PAT installs: use the literal  PAT
+export PRIORITY_PAT="your-token"            # preferred token authentication
+export PRIORITY_READ_ONLY="true"
 
 # Run it
 npx priority-mcp-server
@@ -109,7 +109,7 @@ Add to your config file:
       "args": ["-y", "priority-mcp-server"],
       "env": {
         "PRIORITY_API_URL": "https://your-server.com/odata/Priority",
-        "PRIORITY_ENVIRONMENT": "wlnd",
+        "PRIORITY_ENVIRONMENT": "tabula.ini",
         "PRIORITY_COMPANY": "demodata",
         "PRIORITY_USERNAME": "apiuser",
         "PRIORITY_PASSWORD": "your-password"
@@ -133,7 +133,7 @@ claude mcp add priority -s user \
 ```
 
 > Options go **before** the server name, then `--`, then the launch command. Start with
-> `PRIORITY_READ_ONLY=true` and drop it once you've confirmed reads work. Then run `/mcp`
+> `PRIORITY_READ_ONLY=true` and set it explicitly to false only when writes are intended. Then run `/mcp`
 > (or restart the session) to load the tools. PAT installs: `PRIORITY_USERNAME=<token>`,
 > `PRIORITY_PASSWORD=PAT`.
 
@@ -148,19 +148,23 @@ Add to your Windsurf MCP configuration with the same JSON structure as Claude De
 ### Docker (Remote / HTTP mode)
 
 ```bash
-docker run -p 3000:3000 \
+docker run -p 127.0.0.1:3000:3000 \
+  -e MCP_HTTP_HOST=0.0.0.0 \
+  -e MCP_HTTP_AUTH_TOKEN="$MCP_HTTP_AUTH_TOKEN" \
   -e MCP_TRANSPORT=http \
   -e PRIORITY_API_URL="https://your-server.com/odata/Priority" \
-  -e PRIORITY_ENVIRONMENT="wlnd" \
+  -e PRIORITY_ENVIRONMENT="tabula.ini" \
   -e PRIORITY_COMPANY="demodata" \
   -e PRIORITY_USERNAME="apiuser" \
   -e PRIORITY_PASSWORD="your-password" \
-  ghcr.io/assafch/priority-mcp:latest
+  priority-mcp-server:0.2.0
 ```
 
 ---
 
 ## Configuration
+
+Preferred token variable: `PRIORITY_PAT`. `PRIORITY_BASE_URL` can supply the URL through the `.ini` segment, with `PRIORITY_COMPANY` appended. HTTP defaults: host `127.0.0.1`, 30-minute idle sessions, maximum 100 sessions. Non-loopback binding requires `MCP_HTTP_AUTH_TOKEN`; optional `MCP_HTTP_ALLOWED_ORIGINS` allows specific browser origins. `REQUEST_TIMEOUT_MS` defaults to 120000.
 
 All configuration is via environment variables. Validated on startup — the server fails fast with a clear error if anything is missing.
 
@@ -177,7 +181,7 @@ All configuration is via environment variables. Validated on startup — the ser
 | `PRIORITY_LANGUAGE` | No | `EN` | `EN` or `HE` — used for response labelling (set the URL language code via `PRIORITY_ENVIRONMENT` to change Priority's system-message language) |
 | `PRIORITY_CUSTOM_PREFIX` | No | — | Prefix for custom entities (e.g. `ORGT_`) |
 | `PRIORITY_CUSTOM_ENTITIES` | No | — | Comma-separated custom entity names |
-| `PRIORITY_READ_ONLY` | No | `false` | Block all write operations |
+| `PRIORITY_READ_ONLY` | No | `true` | Block all write operations |
 | `PRIORITY_ALLOWED_TOOLS` | No | — | Comma-separated tool allowlist (only these tools are registered) |
 | `PRIORITY_BLOCKED_TOOLS` | No | — | Comma-separated tool blocklist (these tools are not registered) |
 | `CACHE_TTL_SECONDS` | No | `60` | In-memory cache TTL |
@@ -207,9 +211,12 @@ sent as `X-App-Id` / `X-App-Key` headers when present.
 
 ---
 
-## Tools (102)
+## Tools (105)
 
-### Generic / Building Blocks (8)
+Version **0.2.0** exposes 105 tool definitions: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, and `priority_update_line`. Generic document operations now accept validated composite keys.
+
+
+### Generic / Building Blocks (9)
 
 Form-agnostic tools that work against **any** Priority form — discover, read, and write.
 Prefer these when the curated domain tools below don't fit. Discover exact form/field/sub-form
@@ -358,7 +365,7 @@ Hebrew and spaces are fine inside quotes (values are percent-encoded automatical
 | `priority_get_attachment_url` | Read | Stored path/metadata for one attachment (this API exposes no download URL) |
 | `priority_upload_attachment` | Write | Attach a file to a document — POSTs to the parent's attachments sub-form (auto-detected), then verifies by re-read |
 
-### Meta / Admin (5)
+### Meta / Admin (7)
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|
@@ -520,36 +527,17 @@ Two independent safety layers protect every write:
 
 ## Deployment
 
+Use the tested [deployment and rollback guide](docs/deployment.md), including explicit HTTP host/token settings.
+
 ### Local (stdio)
 
 ```bash
 npx priority-mcp-server
 ```
 
-### Docker
+### Containers and hosted services
 
-```bash
-docker build -t priority-mcp-server .
-docker run -p 3000:3000 --env-file .env -e MCP_TRANSPORT=http priority-mcp-server
-```
-
-### Google Cloud Run
-
-```bash
-gcloud builds submit --tag gcr.io/YOUR_PROJECT/priority-mcp-server
-gcloud run deploy priority-mcp-server \
-  --image gcr.io/YOUR_PROJECT/priority-mcp-server \
-  --port 3000 \
-  --set-env-vars="MCP_TRANSPORT=http" \
-  --update-secrets="PRIORITY_PASSWORD=priority-password:latest" \
-  --no-allow-unauthenticated
-```
-
-### Railway
-
-Connect your repo on [railway.app](https://railway.app), set env vars, and deploy. Railway auto-detects the Dockerfile.
-
-See [docs/deployment.md](docs/deployment.md) for detailed guides.
+Use [docs/deployment.md](docs/deployment.md) for the complete host/token/private-ingress configuration and rollback procedure. Build the local `0.2.0` image before testing; this source update has not published a container or npm package.
 
 ---
 

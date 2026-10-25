@@ -8,7 +8,7 @@
  * native `contains()` filter once, and on a 501 transparently falls back to fetching a
  * PROJECTED page of rows and filtering them in-process — returning only the matches, so the
  * model never receives a giant unfiltered dump. The "string functions unsupported" verdict
- * is memoized per process, so subsequent searches skip the doomed `contains` round-trip.
+ * is memoized per authenticated client, so subsequent searches skip the doomed `contains` round-trip.
  */
 
 import { PriorityError } from '../client/errors.js';
@@ -16,17 +16,17 @@ import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import { escapeODataString } from './sanitize.js';
 
-// Process-wide memo. undefined = not yet probed; true/false = last definitive signal.
-let stringFnsSupported: boolean | undefined;
+// Tenant-scoped capability memo.
+let stringFnSupport = new WeakMap<PriorityClient, boolean>();
 
 /** Test hook: forget the cached capability verdict. */
 export function _resetStringFnSupport(): void {
-  stringFnsSupported = undefined;
+  stringFnSupport = new WeakMap();
 }
 
 /** Test/inspection hook: current capability verdict (undefined until first probe). */
-export function _stringFnSupport(): boolean | undefined {
-  return stringFnsSupported;
+export function _stringFnSupport(client: PriorityClient): boolean | undefined {
+  return stringFnSupport.get(client);
 }
 
 /** Does this error mean the installation rejects an OData function (contains/startswith/…)? */
@@ -103,7 +103,7 @@ export async function searchForm<T = Record<string, unknown>>(
   const scanCap = opts.scanCap ?? 2000;
 
   // 1) Native contains() — unless we already learned this install rejects string functions.
-  if (stringFnsSupported !== false) {
+  if (stringFnSupport.get(client) !== false) {
     try {
       const expr = containsExpr(opts.fields, opts.query);
       const filter = opts.baseFilter ? `(${expr}) and ${opts.baseFilter}` : expr;
@@ -112,7 +112,7 @@ export async function searchForm<T = Record<string, unknown>>(
       applyOrderby(qb, opts.orderby);
       qb.top(top + 1); // one extra row reveals whether more matches exist beyond `top`
       const res = await client.list<T>(opts.form, qb.build());
-      stringFnsSupported = true;
+      stringFnSupport.set(client, true);
       const rows = res.value ?? [];
       return {
         value: rows.slice(0, top),
@@ -120,7 +120,7 @@ export async function searchForm<T = Record<string, unknown>>(
       };
     } catch (err) {
       if (isUnsupportedFunctionError(err)) {
-        stringFnsSupported = false; // remember; skip the doomed round-trip next time
+        stringFnSupport.set(client, false); // remember; skip the doomed round-trip next time
       } else if (!isUnknownPropertyError(err)) {
         // A bad/missing field in our expr or projection is recoverable via the client-side
         // fallback (it drops the projection and skips absent fields); anything else is real.

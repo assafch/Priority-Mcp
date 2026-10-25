@@ -4,10 +4,11 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { dateFrom, dateTo } from '../lib/dates.js';
+import { dateRange } from '../lib/dates.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import { verifyRecordCreate, verifyRecordUpdate } from '../lib/write-verification.js';
 
 const ORDERS = getSchema('ORDERS');
 
@@ -37,8 +38,12 @@ Use priority_get_order for full details with line items.`,
         if (params.customerId) qb.eq('CUSTNAME', sanitizeODataValue(params.customerId));
         // Order status field on this install is ORDSTATUSDES (not STATDES).
         if (params.status) qb.eq('ORDSTATUSDES', sanitizeODataValue(params.status));
-        if (params.dateFrom) qb.ge('CURDATE', dateFrom(params.dateFrom));
-        if (params.dateTo) qb.le('CURDATE', dateTo(params.dateTo));
+        const range = dateRange(params.dateFrom, params.dateTo);
+        if (range.from) qb.ge('CURDATE', range.from);
+        if (range.to) {
+          if (range.upperOperator === 'lt') qb.lt('CURDATE', range.to);
+          else qb.le('CURDATE', range.to);
+        }
         if (ORDERS?.defaultSelect) qb.select(...ORDERS.defaultSelect);
         const result = await client.list('ORDERS', qb.build());
         return textResult({
@@ -187,8 +192,8 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
         const gate = previewOrBlock(config, params.dryRun, 'CREATE ORDER', body);
         if (gate) return gate;
 
-        const result = await client.create('ORDERS', body);
-        return textResult({ created: true, order: result });
+        const outcome = await verifyRecordCreate(client, 'ORDERS', body);
+        return textResult({ created: outcome.verified, order: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -220,8 +225,12 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
         );
         if (gate) return gate;
 
-        const result = await client.update('ORDERS', params.orderNumber, body);
-        return textResult({ updated: true, orderNumber: params.orderNumber, result });
+        const outcome = await verifyRecordUpdate(client, 'ORDERS', params.orderNumber, body);
+        return textResult({
+          updated: outcome.verified,
+          orderNumber: params.orderNumber,
+          ...outcome,
+        });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -250,8 +259,12 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
         );
         if (gate) return gate;
 
-        const result = await client.update('ORDERS', params.orderNumber, body);
-        return textResult({ cancelled: true, orderNumber: params.orderNumber, result });
+        const outcome = await verifyRecordUpdate(client, 'ORDERS', params.orderNumber, body);
+        return textResult({
+          cancelled: outcome.verified,
+          orderNumber: params.orderNumber,
+          ...outcome,
+        });
       } catch (err) {
         throw toMcpError(err);
       }

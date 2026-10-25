@@ -39,12 +39,12 @@ beforeEach(() => _resetFormCaches());
 describe('listExposedForms', () => {
   it('reads the service document once and memoizes it', async () => {
     const client = fakeClient();
-    expect(cachedExposedForms()).toBeUndefined();
+    expect(cachedExposedForms(client)).toBeUndefined();
     const first = await listExposedForms(client);
     const second = await listExposedForms(client);
     expect(first).toBe(second);
     expect(client.serviceRoot).toHaveBeenCalledTimes(1);
-    expect(cachedExposedForms()).toHaveLength(4);
+    expect(cachedExposedForms(client)).toHaveLength(4);
   });
 
   it('shares one in-flight request between concurrent callers', async () => {
@@ -202,5 +202,26 @@ describe('attachmentSubformOf', () => {
   it('degrades to null when metadata is unavailable', async () => {
     const client = fakeClient({ getMetadataFor: vi.fn().mockRejectedValue(new Error('boom')) });
     expect(await attachmentSubformOf(client, 'F')).toEqual({ subform: null, subforms: null });
+  });
+});
+
+describe('tenant cache boundaries', () => {
+  it('does not reuse service document results across backend clients', async () => {
+    const a = fakeClient({
+      serviceRoot: vi.fn().mockResolvedValue({ value: [{ name: 'FIRST' }] }),
+    });
+    const b = fakeClient({
+      serviceRoot: vi.fn().mockResolvedValue({ value: [{ name: 'SECOND' }] }),
+    });
+    expect((await listExposedForms(a))[0].name).toBe('FIRST');
+    expect((await listExposedForms(b))[0].name).toBe('SECOND');
+  });
+  it('does not reuse a form probe across clients or projections', async () => {
+    const a = fakeClient();
+    const b = fakeClient({ list: vi.fn().mockRejectedValue(apiFlagOff()) });
+    expect((await probeForm(a, 'ACCOUNTS')).status).toBe('ok');
+    expect((await probeForm(b, 'ACCOUNTS')).status).toBe('api-flag-off');
+    await probeForm(a, 'ACCOUNTS', '?$select=OTHER&$top=1');
+    expect(a.list).toHaveBeenCalledTimes(2);
   });
 });

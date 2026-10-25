@@ -22,6 +22,7 @@ const NAIVE_DATETIME = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)
  */
 export function toODataDateTime(value: string, opts?: { endOfDay?: boolean }): string {
   const v = value.trim();
+  validateDate(v);
   if (DATE_ONLY.test(v)) {
     return opts?.endOfDay ? `${v}T23:59:59Z` : `${v}T00:00:00Z`;
   }
@@ -38,4 +39,59 @@ export function dateFrom(value: string): string {
 /** Range end: 'YYYY-MM-DD' → end of that day (inclusive). */
 export function dateTo(value: string): string {
   return toODataDateTime(value, { endOfDay: true });
+}
+
+/** Reject rollover dates (Date.parse accepts February 30) and malformed/timezone values. */
+function validateDate(value: string): void {
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|([+-])(\d{2}):?(\d{2}))?)?$/.exec(
+      value,
+    );
+  if (!match) throw new Error(`Invalid ISO date: ${value}`);
+  const [, yy, mm, dd, hh, mi, ss, , oh, om] = match;
+  const year = Number(yy);
+  const month = Number(mm);
+  const day = Number(dd);
+  const calendar = new Date(`${yy}-${mm}-${dd}T00:00:00Z`);
+  if (
+    !Number.isFinite(calendar.getTime()) ||
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() + 1 !== month ||
+    calendar.getUTCDate() !== day ||
+    Number(hh ?? 0) > 23 ||
+    Number(mi ?? 0) > 59 ||
+    Number(ss ?? 0) > 59 ||
+    Number(oh ?? 0) > 23 ||
+    Number(om ?? 0) > 59
+  )
+    throw new Error(`Invalid calendar date: ${value}`);
+}
+
+/** Date-only ranges are UTC calendar days; explicit offsets retain their instant meaning. */
+export function dateRange(
+  fromValue?: string,
+  toValue?: string,
+): { from?: string; to?: string; upperOperator: 'lt' | 'le' } {
+  const from = fromValue === undefined ? undefined : dateFrom(fromValue);
+  let to = toValue === undefined ? undefined : toODataDateTime(toValue);
+  const dayEnd = toValue !== undefined && DATE_ONLY.test(toValue.trim());
+  if (dayEnd && to) to = new Date(Date.parse(to) + 86_400_000).toISOString().replace('.000Z', 'Z');
+  if (
+    from &&
+    to &&
+    (dayEnd ? Date.parse(from) >= Date.parse(to) : Date.parse(from) > Date.parse(to))
+  )
+    throw new Error('dateFrom must not be after dateTo');
+  return { ...(from ? { from } : {}), ...(to ? { to } : {}), upperOperator: dayEnd ? 'lt' : 'le' };
+}
+
+/** Validated OData range expression, safe to use before any backend request. */
+export function dateRangeFilter(field: string, from?: string, to?: string): string {
+  const range = dateRange(from, to);
+  return [
+    range.from && `${field} ge ${range.from}`,
+    range.to && `${field} ${range.upperOperator} ${range.to}`,
+  ]
+    .filter(Boolean)
+    .join(' and ');
 }

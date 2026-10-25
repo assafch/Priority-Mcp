@@ -4,10 +4,11 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { dateFrom, dateTo } from '../lib/dates.js';
+import { dateRange } from '../lib/dates.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
 import { previewOrBlock, textResult } from '../lib/write-guard.js';
+import { verifyRecordCreate } from '../lib/write-verification.js';
 
 const PORDERS = getSchema('PORDERS');
 
@@ -36,8 +37,9 @@ export function registerPurchaseOrderTools(
           .orderBy('CURDATE', params.orderDir);
         if (params.supplierId) qb.eq('SUPNAME', sanitizeODataValue(params.supplierId));
         if (params.status) qb.eq('STATDES', sanitizeODataValue(params.status));
-        if (params.dateFrom) qb.ge('CURDATE', dateFrom(params.dateFrom));
-        if (params.dateTo) qb.le('CURDATE', dateTo(params.dateTo));
+        const range = dateRange(params.dateFrom, params.dateTo);
+        if (range.from) qb.ge('CURDATE', range.from);
+        if (range.to) qb[range.upperOperator]('CURDATE', range.to);
         if (PORDERS?.defaultSelect) qb.select(...PORDERS.defaultSelect);
         const result = await client.list('PORDERS', qb.build());
         return textResult({
@@ -129,8 +131,8 @@ Useful for inventory planning — shows what's coming in and when.`,
         const gate = previewOrBlock(config, params.dryRun, 'CREATE PURCHASE ORDER', body);
         if (gate) return gate;
 
-        const result = await client.create('PORDERS', body);
-        return textResult({ created: true, purchaseOrder: result });
+        const outcome = await verifyRecordCreate(client, 'PORDERS', body);
+        return textResult({ created: outcome.verified, purchaseOrder: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
