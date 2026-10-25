@@ -1,0 +1,68 @@
+{
+  "date": "2026-10-25",
+  "commit": "29f89590b567db66949564ac2c083d65dfc6f772",
+  "node": "v26.4.0",
+  "kind": "synthetic-offline-planning-baseline",
+  "livePriority": false,
+  "discovery": {
+    "count": 105,
+    "serializedBytes": 113577,
+    "descriptionsBytes": 34698,
+    "schemaBytes": 54534,
+    "startupAndListInMemoryMs": 17.642,
+    "unavailableCount": 24,
+    "protocol": "2025-11-25",
+    "note": "One in-process sample; excludes process startup, host/LLM cost, and ERP latency. Wire bytes are not token counts."
+  },
+  "catalog": {
+    "topRequested": 100,
+    "calls": 3,
+    "entries": 105,
+    "serializedBytes": 94189
+  },
+  "coalescing": {
+    "concurrentIdenticalReads": 20,
+    "backendCalls": 20,
+    "warmAdditionalCalls": 0,
+    "simulatedNetworkDelayMs": 20,
+    "elapsedMs": 30.341
+  },
+  "searchShortPage": {
+    "datasetRows": 300,
+    "serverPageCap": 100,
+    "matchingRowIndex": 250,
+    "calls": 2,
+    "found": 0,
+    "meta": {
+      "strategy": "client-filter",
+      "scanned": 100,
+      "scanCapped": false,
+      "truncated": false
+    },
+    "expectedMatches": 1
+  },
+  "singleEntitySchema": {
+    "requestedEntity": "CUSTOMERS",
+    "backendEndpoints": [
+      "$metadata"
+    ],
+    "usesFullMetadata": true
+  },
+  "capabilityEvidence": {
+    "explicitRefreshes": 2,
+    "backendCalls": 2,
+    "firstCatalogEvidence": "live-read",
+    "secondSessionEvidence": "static",
+    "note": "Explicit refresh forces reads by design; evidence cache is per catalog/server, unlike shared backend cache."
+  },
+  "serialization": {
+    "samples": 10,
+    "medianMs": 14.655,
+    "p95Ms": 15.673,
+    "inputRows": 20000,
+    "inputJsonBytes": 1088925,
+    "outputTextChars": 13685,
+    "returnedRows": 156,
+    "note": "Direct textResult CPU sample only; tool registry can normalize the already-bounded result again."
+  }
+}
