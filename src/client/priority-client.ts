@@ -1,14 +1,31 @@
+import { createHash } from 'node:crypto';
 import { setTimeout as abortableDelay } from 'node:timers/promises';
 import type { Config } from '../config.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { type NamedKeys, type RecordKey, validateNamedKeys } from '../lib/record-key.js';
 import type { Logger } from '../logger.js';
+import { MetricsCollector, metricFormLabel } from '../runtime/metrics.js';
+import {
+  createOperation,
+  currentOperation,
+  recordReadObservation,
+} from '../runtime/operation-context.js';
+import type { OperationContext } from '../runtime/types.js';
 import { buildAuthHeaders } from './auth.js';
 import { Cache } from './cache.js';
 import { PriorityError, parsePriorityErrorBody, parseRetryAfterMs } from './errors.js';
-import { RateLimiter } from './rate-limit.js';
+import { ReadCoalescer } from './read-coalescer.js';
+import { acquireReadFence } from './read-fence.js';
+import { acquireScheduler } from './request-scheduler.js';
 
-interface RequestOptions {
+export interface ReadOptions {
+  cache?: boolean;
+  signal?: AbortSignal;
+  deadlineAt?: number;
+  budgetMs?: number;
+}
+
+interface RequestOptions extends ReadOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
   cache?: boolean;
@@ -63,23 +80,58 @@ export function isSafeEntityName(entity: string): boolean {
 }
 
 export class PriorityClient {
+  readonly metrics = new MetricsCollector();
   private readonly baseUrl: string;
   private readonly authHeaders: Record<string, string>;
   private readonly cache: Cache;
-  private readonly rateLimiter: RateLimiter;
+  readonly scopeId: string;
+  private readonly schedulerLease: ReturnType<typeof acquireScheduler>;
+  private readonly coalesceReads: boolean;
+  private readonly coalescer = new ReadCoalescer();
+  private readonly shutdown = new AbortController();
+  private readonly maxReadBodyBytes: number;
+  private readonly maxMetadataBodyBytes: number;
   private readonly logger: Logger;
   private readonly readOnly: boolean;
-  private activeWrites = 0;
+  private readonly readFence: ReturnType<typeof acquireReadFence>;
+  private get activeWrites(): number {
+    return this.readFence.activeWrites();
+  }
   private readonly requestTimeoutMs: number;
 
   constructor(config: Config, logger: Logger) {
+    this.coalesceReads = config.priorityCoalesceReads !== false;
     this.baseUrl = PriorityClient.buildBaseUrl(config);
     this.authHeaders = buildAuthHeaders(config);
-    this.cache = new Cache(config.cacheTtlSeconds * 1000);
-    this.rateLimiter = new RateLimiter(config.rateLimitPerMinute);
+    this.cache = new Cache(
+      Math.min(60_000, config.cacheTtlSeconds * 1000),
+      500,
+      config.cacheMaxBytes ?? 32 * 1024 * 1024,
+    );
+    this.schedulerLease = acquireScheduler(config);
+    this.scopeId = createHash('sha256')
+      .update(JSON.stringify([this.baseUrl, this.authHeaders, config.priorityLanguage]))
+      .digest('hex');
+    this.readFence = acquireReadFence(this.scopeId, (generation, pattern) =>
+      this.cache.invalidate(pattern, generation),
+    );
+    this.maxReadBodyBytes = config.priorityMaxReadBodyBytes ?? 16 * 1024 * 1024;
+    this.maxMetadataBodyBytes = config.priorityMaxMetadataBodyBytes ?? 32 * 1024 * 1024;
     this.logger = logger;
     this.readOnly = config.priorityReadOnly;
-    this.requestTimeoutMs = config.requestTimeoutMs;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? 120000;
+  }
+
+  cacheGeneration(): number {
+    return this.readFence.generation();
+  }
+
+  close(): void {
+    if (this.shutdown.signal.aborted) return;
+    this.shutdown.abort(new Error('Priority client closed'));
+    this.cache.invalidate();
+    this.readFence.release();
+    this.schedulerLease.release();
   }
 
   /**
@@ -217,7 +269,7 @@ export class PriorityClient {
     subform: string,
     subKeys: Record<string, string | number>,
     query?: string,
-    options: { cache?: boolean; signal?: AbortSignal } = {},
+    options: ReadOptions = {},
   ): Promise<T> {
     return this.send<T>(
       this.resolveSubformRowUrl(entity, keys, subform, subKeys, query),
@@ -225,6 +277,7 @@ export class PriorityClient {
       undefined,
       options.cache !== false,
       options.signal,
+      options,
     );
   }
 
@@ -236,7 +289,7 @@ export class PriorityClient {
     subKeys: Record<string, string | number>,
     body: unknown,
   ): Promise<T> {
-    this.cache.invalidate(entity);
+    this.invalidateCache(entity);
     return this.send<T>(
       this.resolveSubformRowUrl(entity, keys, subform, subKeys),
       'PATCH',
@@ -271,165 +324,342 @@ export class PriorityClient {
     body?: unknown,
     useCache = true,
     signal?: AbortSignal,
+    budget: ReadOptions = {},
   ): Promise<T> {
     if (method === 'GET' || this.readOnly)
-      return this.sendRequest<T>(url, method, body, useCache, signal);
-    this.activeWrites++;
-    this.cache.invalidate();
+      return this.sendRequest<T>(url, method, body, useCache, signal, budget);
+    this.readFence.beginWrite();
     try {
-      return await this.sendRequest<T>(url, method, body, false, signal);
+      return await this.sendRequest<T>(url, method, body, false, signal, budget);
     } finally {
       // An ambiguous write may have committed; all cached derived forms must be refreshed too.
-      this.cache.invalidate();
-      this.activeWrites--;
+      this.readFence.endWrite();
     }
   }
 
-  /** Low-level send: rate-limit + retry + read-only guard + cache + error surfacing. */
+  /** Cacheable reads share work, never subscriber cancellation or authorization scope. */
   private async sendRequest<T>(
     url: string,
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     body?: unknown,
     useCache = true,
     signal?: AbortSignal,
+    budget: ReadOptions = {},
   ): Promise<T> {
-    signal?.throwIfAborted();
-    if (this.readOnly && method !== 'GET') {
+    const inherited =
+      currentOperation() ??
+      createOperation('client', url.endsWith('/$metadata') ? { workClass: 'discovery' } : {});
+    const ctx: OperationContext = {
+      ...inherited,
+      signal: AbortSignal.any([
+        inherited.signal,
+        this.shutdown.signal,
+        ...(signal ? [signal] : []),
+      ]),
+      deadlineAt: Math.min(
+        inherited.deadlineAt,
+        budget.deadlineAt ?? Number.POSITIVE_INFINITY,
+        budget.budgetMs === undefined ? Number.POSITIVE_INFINITY : Date.now() + budget.budgetMs,
+      ),
+    };
+    ctx.signal.throwIfAborted();
+    if (ctx.deadlineAt <= Date.now()) throw new PriorityError('Request deadline exceeded.', 408);
+    if (this.readOnly && method !== 'GET')
       throw new PriorityError(
         'Server is in read-only mode. Write operations are disabled.',
         403,
         undefined,
         'Set PRIORITY_READ_ONLY=false to enable writes.',
       );
-    }
-
-    const cacheGeneration = this.cache.generation();
-    if (method === 'GET' && useCache && this.activeWrites === 0) {
-      const cached = this.cache.get<T>(url);
+    const metric = { form: this.requestedResource(url)?.form, method };
+    const generation = this.readFence.generation();
+    const sensitive = this.shortTtlRead(url, ctx);
+    const observe = (result: { data: T; observedAt: number }, cached = false): T => {
+      if (method === 'GET') recordReadObservation(ctx, result.observedAt, cached, sensitive);
+      return result.data;
+    };
+    const cacheable = method === 'GET' && useCache && this.activeWrites === 0;
+    if (cacheable) {
+      const cached = this.cache.getEntry<T>(url);
       if (cached !== undefined) {
-        this.logger.debug({ url }, 'Cache hit');
-        return cached;
+        this.metrics.record({ ...metric, phase: 'cache', cache: 'hit' });
+        this.logger.debug(
+          { method, form: metricFormLabel(metric.form), traceId: ctx.traceId },
+          'Cache hit',
+        );
+        return observe({ data: cached.value, observedAt: cached.observedAt }, true);
       }
     }
+    if (!cacheable) {
+      this.metrics.record({ ...metric, phase: 'cache', cache: 'bypass' });
+      return observe(await this.sendAttempts<T>(url, method, body, false, generation, ctx));
+    }
+    if (!this.coalesceReads)
+      return observe(await this.sendAttempts<T>(url, method, body, true, generation, ctx));
+    const key = `${this.scopeId}:${generation}:${url}`;
+    this.metrics.record({
+      ...metric,
+      phase: 'cache',
+      cache: this.coalescer.has(key) ? 'coalesced' : 'miss',
+    });
+    const result = await this.coalescer.run<{ data: T; observedAt: number }>(
+      key,
+      ctx,
+      (sharedSignal) =>
+        this.sendAttempts<T>(url, method, body, true, generation, {
+          ...ctx,
+          // Subscribers enforce their own deadlines; one short-lived subscriber cannot terminate
+          // a later subscriber's work. All leaving aborts this shared signal immediately.
+          signal: AbortSignal.any([sharedSignal, this.shutdown.signal]),
+          deadlineAt: Number.POSITIVE_INFINITY,
+        }),
+    );
+    return observe(result);
+  }
 
-    const headers: Record<string, string> = {
+  private shortTtlRead(url: string, ctx: OperationContext): boolean {
+    const form = this.requestedResource(url)?.form ?? '';
+    return (
+      /OBLIGO|LOGPART|PARTBALANCE|BALANCE|CREDIT|DEBT|CASH|STOCK|INVOICE|IMPFILE|ACCOUNTS|AGED/.test(
+        form,
+      ) ||
+      /PARTBALANCE|STOCK|OBLIGO/.test(new URL(url).searchParams.get('$expand') ?? '') ||
+      /balance|stock|debt|cash|invoice|landed_cost|sales_by_period|revenue/.test(ctx.toolName)
+    );
+  }
+
+  /** Count decoded streaming bytes, including compressed responses, and cancel promptly. */
+  private async readBody(res: Response, maxBytes: number, signal: AbortSignal): Promise<string> {
+    if (!res.body) return '';
+    const reader = res.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    let onAbort: () => void = () => {};
+    const cancelled = new Promise<never>((_resolve, reject) => {
+      onAbort = () => {
+        void reader.cancel().catch(() => {});
+        reject(new PriorityError('Request deadline exceeded or cancelled.', 408));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) onAbort();
+    });
+    try {
+      while (true) {
+        const chunk = await Promise.race([reader.read(), cancelled]);
+        signal.throwIfAborted();
+        if (chunk.done) break;
+        bytes += chunk.value.byteLength;
+        if (bytes > maxBytes) {
+          void reader.cancel().catch(() => {});
+          throw new PriorityError(
+            'Priority response body exceeded the configured decoded-byte limit; result is incomplete.',
+            413,
+          );
+        }
+        chunks.push(chunk.value);
+      }
+      return Buffer.concat(chunks, bytes).toString('utf8');
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+      reader.releaseLock();
+    }
+  }
+
+  /** One retry owner; every attempt reacquires the shared quota and concurrency slot. */
+  private async sendAttempts<T>(
+    url: string,
+    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    body: unknown,
+    useCache: boolean,
+    generation: number,
+    ctx: OperationContext,
+  ): Promise<{ data: T; observedAt: number }> {
+    const metric = { form: this.requestedResource(url)?.form, method };
+    const deadline = new AbortController();
+    const deadlineTimer = Number.isFinite(ctx.deadlineAt)
+      ? setTimeout(
+          () => deadline.abort(new Error('Request deadline exceeded')),
+          Math.max(0, ctx.deadlineAt - Date.now()),
+        )
+      : undefined;
+    deadlineTimer?.unref?.();
+    const signal = AbortSignal.any([ctx.signal, deadline.signal]);
+    const attemptContext = { ...ctx, signal };
+    const headers = {
       ...this.authHeaders,
       'Content-Type': 'application/json',
       Accept: 'application/json',
     };
-
-    let lastError: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      // Acquire a rate-limiter slot per ATTEMPT so retries also count against the limit
-      // (otherwise a burst of retries during a 429 storm hammers the already-throttled server).
-      await this.rateLimiter.acquire();
-      signal?.throwIfAborted();
-      try {
-        this.logger.debug({ method, url, attempt }, 'Priority API request');
-
-        let res: Response;
+    const maxBytes = url.endsWith('/$metadata') ? this.maxMetadataBodyBytes : this.maxReadBodyBytes;
+    try {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        signal.throwIfAborted();
+        const queuedAt = performance.now();
+        let release: (() => void) | undefined;
         try {
-          res = await fetch(url, {
+          release = await this.schedulerLease.scheduler.acquire(attemptContext);
+        } finally {
+          this.metrics.record({
+            ...metric,
+            phase: 'queue',
+            durationMs: performance.now() - queuedAt,
+            outcome: signal.aborted ? 'cancelled' : 'ok',
+          });
+        }
+        const networkStarted = performance.now();
+        let networkRecorded = false;
+        const recordNetwork = (outcome: 'ok' | 'error' | 'cancelled', bytes = 0) => {
+          if (networkRecorded) return;
+          networkRecorded = true;
+          this.metrics.record({
+            ...metric,
+            phase: 'network',
+            durationMs: performance.now() - networkStarted,
+            bytes,
+            outcome,
+          });
+        };
+        const timeout = new AbortController();
+        const timeoutTimer = setTimeout(
+          () => timeout.abort(new Error('Request timeout exceeded')),
+          this.requestTimeoutMs,
+        );
+        timeoutTimer.unref?.();
+        const attemptSignal = AbortSignal.any([signal, timeout.signal]);
+        try {
+          attemptSignal.throwIfAborted();
+          this.logger.debug(
+            { method, form: metricFormLabel(metric.form), traceId: ctx.traceId, attempt },
+            'Priority API request',
+          );
+          const res = await fetch(url, {
             method,
             redirect: 'error',
             headers,
             body: body !== undefined ? JSON.stringify(body) : undefined,
-            signal: signal
-              ? AbortSignal.any([signal, AbortSignal.timeout(this.requestTimeoutMs)])
-              : AbortSignal.timeout(this.requestTimeoutMs),
+            signal: attemptSignal,
           });
-        } catch (fetchErr) {
-          if (signal?.aborted) throw new PriorityError('Read cancelled by caller.', 408);
-          // Our own timeout (AbortSignal.timeout). Surface as a non-retryable 408 so a hung
-          // endpoint fails fast instead of blocking for timeout × 3 attempts.
-          if (
-            fetchErr instanceof Error &&
-            (fetchErr.name === 'TimeoutError' || fetchErr.name === 'AbortError')
-          ) {
-            throw new PriorityError(
-              `Request timed out after ${this.requestTimeoutMs}ms`,
-              408,
-              undefined,
-              'The Priority endpoint did not respond in time; narrow the query (smaller $top, a shorter date window, or fewer $expand sub-forms).',
-              undefined,
-              undefined,
-              this.requestedResource(url),
-            );
+          if (res.status === 204) {
+            recordNetwork('ok');
+            return { data: undefined as T, observedAt: Date.now() };
           }
-          throw fetchErr; // genuine network error → normal retry path
-        }
-
-        if (!res.ok) {
-          const raw = await res.text().catch(() => '');
-          let parsedBody: unknown = raw;
-          try {
-            parsedBody = raw ? JSON.parse(raw) : raw;
-          } catch {
-            /* keep raw text */
-          }
-          const parsed = parsePriorityErrorBody(parsedBody);
-          const retryAfterMs =
-            res.status === 429 ? parseRetryAfterMs(res.headers.get('retry-after')) : undefined;
-          // Surface the raw response body verbatim so the model can self-correct, and carry the
-          // form this request targeted so the error can name it (404s come back with an empty body).
-          throw new PriorityError(
-            parsed.message,
-            res.status,
-            parsed.code,
-            undefined,
-            raw || undefined,
-            retryAfterMs,
-            this.requestedResource(url),
-          );
-        }
-
-        // 204/empty responses (common on DELETE / some PATCH).
-        if (res.status === 204) return undefined as T;
-        const text = await res.text();
-        if (!text) return undefined as T;
-        // JSON by default; return raw text for non-JSON bodies (e.g. $metadata XML).
-        const contentType = res.headers.get('content-type') ?? '';
-        let data: T;
-        if (contentType.includes('json')) {
-          try {
-            data = JSON.parse(text) as T;
-          } catch {
-            // A 2xx response with a malformed/truncated JSON body (proxy/gateway quirk):
-            // surface the status + raw body instead of a bare SyntaxError, and don't retry.
+          const text = await this.readBody(res, maxBytes, attemptSignal);
+          if (!res.ok) {
+            let parsedBody: unknown = text;
+            try {
+              parsedBody = text ? JSON.parse(text) : text;
+            } catch {
+              /* preserve raw error */
+            }
+            recordNetwork('error', Buffer.byteLength(text));
+            const parsed = parsePriorityErrorBody(parsedBody);
+            const retryAfterMs =
+              res.status === 429 ? parseRetryAfterMs(res.headers.get('retry-after')) : undefined;
+            if (res.status === 429) this.schedulerLease.scheduler.pause(retryAfterMs ?? 500);
             throw new PriorityError(
-              'Priority returned a success response with an invalid JSON body.',
+              parsed.message,
               res.status,
+              parsed.code,
               undefined,
-              undefined,
-              text,
-              undefined,
+              text || undefined,
+              retryAfterMs,
               this.requestedResource(url),
             );
           }
-        } else {
-          data = text as T;
-        }
-
-        if (method === 'GET' && useCache && this.activeWrites === 0)
-          this.cache.set(url, data, cacheGeneration);
-        return data;
-      } catch (err) {
-        lastError = err;
-        const status = err instanceof PriorityError ? err.statusCode : undefined;
-        if (!isRetryable(method, status)) {
-          throw err;
-        }
-        if (attempt < 2) {
-          // Honor a 429 Retry-After when present; otherwise exponential backoff.
-          const retryAfter = err instanceof PriorityError ? err.retryAfterMs : undefined;
-          const delay = retryAfter ?? 2 ** attempt * 500;
-          this.logger.warn({ err, attempt, delay, method }, 'Retrying...');
-          await abortableDelay(delay, undefined, { signal });
+          recordNetwork('ok', Buffer.byteLength(text));
+          if (!text) return { data: undefined as T, observedAt: Date.now() };
+          let data: T;
+          if ((res.headers.get('content-type') ?? '').includes('json')) {
+            const parseStarted = performance.now();
+            try {
+              data = JSON.parse(text) as T;
+            } catch {
+              throw new PriorityError(
+                'Priority returned a success response with an invalid JSON body.',
+                res.status,
+                undefined,
+                undefined,
+                text,
+                undefined,
+                this.requestedResource(url),
+              );
+            } finally {
+              this.metrics.record({
+                ...metric,
+                phase: 'parse',
+                durationMs: performance.now() - parseStarted,
+                bytes: Buffer.byteLength(text),
+              });
+            }
+          } else data = text as T;
+          if (
+            method === 'GET' &&
+            data &&
+            typeof data === 'object' &&
+            Array.isArray((data as { value?: unknown }).value)
+          ) {
+            this.metrics.record({
+              ...metric,
+              phase: 'rows',
+              value: ((data as { value?: unknown }).value as unknown[]).length,
+            });
+            this.metrics.record({ ...metric, phase: 'pages', value: 1 });
+          }
+          const observedAt = Date.now();
+          if (method === 'GET' && useCache && this.activeWrites === 0 && !signal.aborted)
+            this.cache.set(url, data, generation, Buffer.byteLength(text), {
+              observedAt,
+              ttlMs: this.shortTtlRead(url, ctx) ? 15_000 : 60_000,
+            });
+          return { data, observedAt };
+        } catch (error) {
+          recordNetwork(attemptSignal.aborted ? 'cancelled' : 'error');
+          if (attemptSignal.aborted)
+            throw new PriorityError('Request deadline exceeded or cancelled.', 408);
+          lastError = error;
+          const status = error instanceof PriorityError ? error.statusCode : undefined;
+          if (!isRetryable(method, status)) throw error;
+          if (attempt < 2) {
+            // Release concurrency before sleeping; the shared 429 pause still prevents admission.
+            release();
+            release = undefined;
+            clearTimeout(timeoutTimer);
+            const retryAfter = error instanceof PriorityError ? error.retryAfterMs : undefined;
+            const delay =
+              retryAfter ?? Math.round(2 ** attempt * 500 * (0.9 + Math.random() * 0.2));
+            this.logger.warn(
+              {
+                status: status ?? 'network',
+                form: metricFormLabel(metric.form),
+                attempt,
+                delay,
+                method,
+                traceId: ctx.traceId,
+              },
+              'Retrying Priority request',
+            );
+            const retryStarted = performance.now();
+            try {
+              await abortableDelay(delay, undefined, { signal });
+            } finally {
+              this.metrics.record({
+                ...metric,
+                phase: 'retry',
+                durationMs: performance.now() - retryStarted,
+                outcome: signal.aborted ? 'cancelled' : 'ok',
+              });
+            }
+          }
+        } finally {
+          clearTimeout(timeoutTimer);
+          release?.();
         }
       }
+      throw lastError;
+    } finally {
+      clearTimeout(deadlineTimer);
     }
-
-    throw lastError;
   }
 
   /** Core request: build URL from entity/key/query then send. */
@@ -441,13 +671,20 @@ export class PriorityClient {
   ): Promise<T> {
     const method = options.method ?? 'GET';
     const url = this.resolveEntityUrl(entity, key, query);
-    return this.send<T>(url, method, options.body, options.cache !== false, options.signal);
+    return this.send<T>(
+      url,
+      method,
+      options.body,
+      options.cache !== false,
+      options.signal,
+      options,
+    );
   }
 
   /** Safe GET-only continuation. Reject raw traversal before URL normalization can hide it. */
   async listNext<T = unknown>(
     nextLink: string,
-    options: { signal?: AbortSignal } = {},
+    options: Omit<ReadOptions, 'cache'> = {},
   ): Promise<{ value: T[]; '@odata.nextLink'?: string }> {
     let decoded = nextLink.split(/[?#]/, 1)[0];
     for (let i = 0; i < 8; i++) {
@@ -482,7 +719,7 @@ export class PriorityClient {
         'Continuation URL must remain within the exact configured company.',
         400,
       );
-    return this.send(url.href, 'GET', undefined, false, options.signal);
+    return this.send(url.href, 'GET', undefined, false, options.signal, options);
   }
 
   /** Composite read with optional cache bypass for verification and operational helpers. */
@@ -490,7 +727,7 @@ export class PriorityClient {
     entity: string,
     keys: NamedKeys,
     query?: string,
-    options: { cache?: boolean; signal?: AbortSignal } = {},
+    options: ReadOptions = {},
   ): Promise<T> {
     return this.get<T>(entity, keys, query, options);
   }
@@ -501,15 +738,22 @@ export class PriorityClient {
   }
 
   /** GET GetMetadataFor(entity='X') — field names, types, titles, mandatory flags (Priority 25.0+). */
-  async getMetadataFor<T = unknown>(entity: string): Promise<T> {
-    return this.send<T>(this.metadataForUrl(entity), 'GET', undefined, true);
+  async getMetadataFor<T = unknown>(entity: string, options: ReadOptions = {}): Promise<T> {
+    return this.send<T>(
+      this.metadataForUrl(entity),
+      'GET',
+      undefined,
+      options.cache !== false,
+      options.signal,
+      options,
+    );
   }
 
   /** GET entity list with OData query. */
   async list<T = unknown>(
     entity: string,
     query?: string,
-    options: { cache?: boolean; signal?: AbortSignal } = {},
+    options: ReadOptions = {},
   ): Promise<{ value: T[]; '@odata.nextLink'?: string }> {
     return this.request(entity, undefined, query, options);
   }
@@ -519,7 +763,7 @@ export class PriorityClient {
     entity: string,
     key: RecordKey,
     query?: string,
-    options: { cache?: boolean; signal?: AbortSignal } = {},
+    options: ReadOptions = {},
   ): Promise<T> {
     return this.request<T>(entity, key, query, options);
   }
@@ -530,7 +774,7 @@ export class PriorityClient {
     key: RecordKey,
     subform: string,
     query?: string,
-    options: { cache?: boolean; signal?: AbortSignal } = {},
+    options: ReadOptions = {},
   ): Promise<{ value: T[] }> {
     if (query) this.assertSafeQuery(query);
     const url = this.resolveSubformUrl(form, key, subform) + (query ?? '');
@@ -540,18 +784,19 @@ export class PriorityClient {
       undefined,
       options.cache !== false,
       options.signal,
+      options,
     );
   }
 
   /** POST create (supports OData deep-insert: header object + nested subform arrays). */
   async create<T = unknown>(entity: string, body: unknown): Promise<T> {
-    this.cache.invalidate(entity);
+    this.invalidateCache(entity);
     return this.request<T>(entity, undefined, undefined, { method: 'POST', body });
   }
 
   /** PATCH update by key. */
   async update<T = unknown>(entity: string, key: RecordKey, body: unknown): Promise<T> {
-    this.cache.invalidate(entity);
+    this.invalidateCache(entity);
     return this.request<T>(entity, key, undefined, { method: 'PATCH', body });
   }
 
@@ -561,7 +806,7 @@ export class PriorityClient {
     keys: Record<string, string | number>,
     body: unknown,
   ): Promise<T> {
-    this.cache.invalidate(entity);
+    this.invalidateCache(entity);
     return this.send<T>(this.resolveCompositeUrl(entity, keys), 'PATCH', body, false);
   }
 
@@ -572,7 +817,7 @@ export class PriorityClient {
    * invalidation on create/update/updateComposite does not cover.
    */
   invalidateCache(pattern: string): void {
-    this.cache.invalidate(pattern);
+    this.readFence.invalidate(pattern);
   }
 
   /** POST a new line to a sub-form (navigation property) on an existing record. */
@@ -582,13 +827,13 @@ export class PriorityClient {
     subform: string,
     body: unknown,
   ): Promise<T> {
-    this.cache.invalidate(form);
+    this.invalidateCache(form);
     return this.send<T>(this.resolveSubformUrl(form, key, subform), 'POST', body, false);
   }
 
   /** DELETE by key. */
   async delete(entity: string, key: string): Promise<void> {
-    this.cache.invalidate(entity);
+    this.invalidateCache(entity);
     await this.request(entity, key, undefined, { method: 'DELETE' });
   }
 }

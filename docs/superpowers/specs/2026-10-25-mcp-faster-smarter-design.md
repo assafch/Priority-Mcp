@@ -1,6 +1,6 @@
 # Faster and smarter Priority MCP — design
 
-Date: 2026-10-25. Status: proposed design, not implemented. Baseline: release 0.2.0, commit `29f89590b567db66949564ac2c083d65dfc6f772`. Planning scope only; production code and tenant configuration remain unchanged.
+Date: 2026-10-25. Status: core implementation completed locally; final offline verification recorded separately. Baseline: release 0.2.0, commit `29f89590b567db66949564ac2c083d65dfc6f772`. The original planning evidence below remains historical. Source implementation is local; tenant configuration and deployed runtime remain unchanged. See [verification record](../../audits/2026-10-25/faster-smarter-verification.md).
 
 ## Intent and decisions
 

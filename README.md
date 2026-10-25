@@ -8,13 +8,13 @@
 
 <p align="center">
   <strong>Connect AI assistants to Priority ERP</strong><br/>
-  105 tools (8 generic building blocks + 94 domain tools) &middot; 3 resources &middot; 5 workflow prompts
+  110 tools &middot; schema, help and scoped result resources &middot; 5 workflow prompts
 </p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License" /></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg" alt="Node 22.13+" /></a>
-  <a href="#tools-105"><img src="https://img.shields.io/badge/tools-105-blue.svg" alt="105 tools" /></a>
+  <a href="#tools-110"><img src="https://img.shields.io/badge/tools-110-blue.svg" alt="110 tools" /></a>
   <a href="#mcp-prompts-5"><img src="https://img.shields.io/badge/prompts-5-purple.svg" alt="5 prompts" /></a>
 </p>
 
@@ -22,7 +22,7 @@
   <a href="#-quick-start">Quick Start</a> &bull;
   <a href="#-setup-recipes">Setup Recipes</a> &bull;
   <a href="#%EF%B8%8F-configuration">Configuration</a> &bull;
-  <a href="#tools-105">Tools</a> &bull;
+  <a href="#tools-110">Tools</a> &bull;
   <a href="#-deployment">Deployment</a> &bull;
   <a href="#-priority-setup">Priority Setup</a>
 </p>
@@ -185,7 +185,7 @@ All configuration is via environment variables. Validated on startup — the ser
 | `PRIORITY_ALLOWED_TOOLS` | No | — | Comma-separated tool allowlist (only these tools are registered) |
 | `PRIORITY_BLOCKED_TOOLS` | No | — | Comma-separated tool blocklist (these tools are not registered) |
 | `CACHE_TTL_SECONDS` | No | `60` | In-memory cache TTL |
-| `RATE_LIMIT_PER_MINUTE` | No | `120` | Max API requests per minute |
+| `RATE_LIMIT_PER_MINUTE` | No | `90` | Process-local account attempt budget, including retries |
 | `LOG_LEVEL` | No | `info` | `trace` / `debug` / `info` / `warn` / `error` |
 | `MCP_TRANSPORT` | No | `stdio` | `stdio` (local) or `http` (remote) |
 | `MCP_HTTP_PORT` | No | `3000` | HTTP port when transport is `http` |
@@ -211,9 +211,17 @@ sent as `X-App-Id` / `X-App-Key` headers when present.
 
 ---
 
-## Tools (105)
+## Faster and smarter reads (unreleased)
 
-Version **0.2.0** exposes 105 tool definitions: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, and `priority_update_line`. Generic document operations now accept validated composite keys.
+Set `PRIORITY_TOOL_PROFILE=operations` for a compact <=25 tool surface; `full` remains the default. Every internal workflow dependency still obeys allow/block policy. New tools are `priority_resolve_entity`, `priority_prepare_query`, `priority_customer_snapshot`, `priority_order_diagnosis`, and `priority_import_diagnosis`.
+
+Identical concurrent cacheable reads share one request. A bounded process-local scheduler shares account quotas without sharing data across credentials. Search follows real continuations and reports incomplete scans. Targeted schemas and capability evidence are cached per authenticated client. Names require explicit selection when ambiguous; exact IDs retain leading zeros.
+
+Read [performance and rollout](docs/performance-rollout.md) for limits, measurements, opt-in profile, private aliases, rollback and the separately authorized live pilot. Local offline verification does not establish live ERP speed or model quality.
+
+## Tools (110)
+
+The **unreleased faster/smarter update** retains all 105 legacy tools and adds resolver, typed query preparation and three read workflows (110 total). The legacy 0.2.0 inventory includes: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, and `priority_update_line`. Generic document operations now accept validated composite keys.
 
 
 ### Generic / Building Blocks (9)

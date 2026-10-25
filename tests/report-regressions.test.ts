@@ -24,7 +24,23 @@ function harness(
     tool: (name: string, _description: string, _schema: unknown, handler: Handler) =>
       handlers.set(name, handler),
   };
-  register(server as unknown as McpServer, { list, listNext } as unknown as PriorityClient);
+  register(
+    server as unknown as McpServer,
+    {
+      list,
+      listNext,
+      request: async (path: string) => {
+        const entity = path.match(/entity='([^']+)'/)?.[1] ?? '';
+        const keys =
+          entity === 'AINVOICES'
+            ? ['IVNUM', 'DEBIT', 'IVTYPE']
+            : entity === 'DOCUMENTS_D'
+              ? ['DOCNO']
+              : ['LINEKEY'];
+        return `<Schema><EntityType Name="${entity}"><Key>${keys.map((name) => `<PropertyRef Name="${name}" />`).join('')}</Key>${[...keys, 'PARTNAME'].map((name) => `<Property Name="${name}" Type="Edm.String" />`).join('')}</EntityType></Schema>`;
+      },
+    } as unknown as PriorityClient,
+  );
   return async (
     name: string,
     params: Record<string, unknown>,
@@ -199,14 +215,16 @@ describe('audited report regressions', () => {
         value: [
           {
             IVNUM: filter.includes('2026-01-01') ? 'A' : 'B',
+            DEBIT: 'D',
+            IVTYPE: 'A',
             IVDATE: '2026-01-01',
-            AINVOICEITEMS_SUBFORM: [{ PARTNAME: 'P', TQUANT: 1 }],
+            AINVOICEITEMS_SUBFORM: [{ LINEKEY: 1, PARTNAME: 'P', TQUANT: 1 }],
             'AINVOICEITEMS_SUBFORM@odata.nextLink': 'nested',
           },
         ],
       };
     });
-    const next = vi.fn().mockResolvedValue({ value: [{ PARTNAME: 'P', TQUANT: 2 }] });
+    const next = vi.fn().mockResolvedValue({ value: [{ LINEKEY: 2, PARTNAME: 'P', TQUANT: 2 }] });
     const call = harness(registerSalesReportTools, list, next);
     const result = await call('priority_product_sales_by_period', salesParams);
     expect(result.grandTotal).toBe(6);
@@ -226,8 +244,10 @@ describe('audited report regressions', () => {
         value: [
           {
             IVNUM: 'A',
+            DEBIT: 'D',
+            IVTYPE: 'A',
             IVDATE: '2026-01-01T00:00:00+02:00',
-            AINVOICEITEMS_SUBFORM: [{ PARTNAME: 'P', TQUANT: 1 }],
+            AINVOICEITEMS_SUBFORM: [{ LINEKEY: 1, PARTNAME: 'P', TQUANT: 1 }],
           },
         ],
       })
@@ -243,6 +263,7 @@ describe('audited report regressions', () => {
     const pending = call('priority_product_sales_by_period', salesParams, {
       signal: controller.signal,
     });
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
     controller.abort();
     const result = await pending;
     expect(result.meta.complete).toBe(false);

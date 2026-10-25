@@ -15,6 +15,8 @@ function makeClient(handler: Handler): { client: PriorityClient; queries: string
   const client = {
     list: (entity: string, query = '') => {
       queries.push(decodeURIComponent(query));
+      if (Number(new URLSearchParams(query.replace(/^\?/, '')).get('$skip') ?? 0) > 0)
+        return Promise.resolve({ value: [] });
       return handler(entity, query);
     },
   } as unknown as PriorityClient;
@@ -101,27 +103,31 @@ describe('searchForm', () => {
     expect(second.queries.some((q) => q.includes('contains('))).toBe(false);
   });
 
-  it('retries the fallback fetch without projection when a $select field is unknown', async () => {
+  it('surfaces an unknown projected field without an all-column retry', async () => {
     const { client, queries } = makeClient(async (_e, query) => {
-      const q = decodeURIComponent(query);
-      if (q.includes('contains(')) throw unsupported();
-      if (q.includes('$select=') && q.includes('BARCODE')) {
-        throw new PriorityError("Could not find a property named 'BARCODE'", 400);
-      }
-      return { value: [{ PARTNAME: 'P1', PARTDES: 'Blue Widget' }] };
+      if (decodeURIComponent(query).includes('contains(')) throw unsupported();
+      throw new PriorityError("Could not find a property named 'BARCODE'", 400);
     });
-    const res = await searchForm<{ PARTNAME: string; PARTDES: string }>(client, {
-      form: 'LOGPART',
-      query: 'widget',
-      fields: ['PARTDES', 'BARCODE'],
-      select: ['PARTNAME', 'PARTDES', 'BARCODE'],
-      top: 5,
+    await expect(
+      searchForm(client, {
+        form: 'LOGPART',
+        query: 'widget',
+        fields: ['PARTDES', 'BARCODE'],
+        select: ['PARTNAME', 'PARTDES', 'BARCODE'],
+        top: 5,
+      }),
+    ).rejects.toThrow('BARCODE');
+    expect(queries.every((q) => q.includes('$select='))).toBe(true);
+  });
+
+  it('surfaces native unknown-property errors instead of silently changing search semantics', async () => {
+    const { client, queries } = makeClient(async () => {
+      throw new PriorityError("Could not find a property named 'BARCODE'", 400);
     });
-    expect(res.meta.strategy).toBe('client-filter');
-    expect(res.value).toHaveLength(1);
-    expect(res.value[0].PARTNAME).toBe('P1');
-    // The unprojected retry (no $select) was issued.
-    expect(queries.some((q) => !q.includes('$select='))).toBe(true);
+    await expect(
+      searchForm(client, { form: 'LOGPART', query: 'x', fields: ['BARCODE'] }),
+    ).rejects.toThrow('BARCODE');
+    expect(queries).toHaveLength(1);
   });
 
   it('reports scanCapped when the scan hits the cap', async () => {

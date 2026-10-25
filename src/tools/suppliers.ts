@@ -6,6 +6,7 @@ import type { PriorityClient } from '../client/priority-client.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { searchForm } from '../lib/search.js';
 import { textResult, unavailableHere } from '../lib/write-guard.js';
+import { currentOperation } from '../runtime/operation-context.js';
 
 const SUPPLIERS = getSchema('SUPPLIERS');
 
@@ -14,16 +15,23 @@ export function registerSupplierTools(server: McpServer, client: PriorityClient)
     'priority_list_suppliers',
     'List suppliers from Priority ERP with optional filters.',
     {
+      cursor: z
+        .string()
+        .optional()
+        .describe('Server-owned search continuation; repeat the same search arguments.'),
       search: z.string().optional().describe('Search in supplier name'),
       top: z.number().int().min(1).max(500).default(50),
       skip: z.number().int().min(0).default(0),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
         // Text search routes through the capability-aware helper (falls back to server-side
         // matching when the install rejects contains()).
         if (params.search) {
           const { value, meta } = await searchForm(client, {
+            signal: extra?.signal ?? currentOperation()?.signal,
+            deadlineAt: currentOperation()?.deadlineAt,
+            cursor: params.cursor,
             form: 'SUPPLIERS',
             query: params.search,
             fields: SUPPLIERS?.searchFields ?? ['SUPDES', 'SUPNAME'],
@@ -60,15 +68,22 @@ an installation that rejects OData string functions (this one does — HTTP 501)
 back to scanning projected rows and matching server-side, returning only the matches. The result's
 'search.strategy' tells you which path ran.`,
     {
+      cursor: z
+        .string()
+        .optional()
+        .describe('Server-owned search continuation; repeat the same search arguments.'),
       query: z
         .string()
         .min(1)
         .describe('Search term — matches name, supplier number, phone, email'),
       top: z.number().int().min(1).max(100).default(20).describe('Max results'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
         const { value, meta } = await searchForm(client, {
+          signal: extra?.signal ?? currentOperation()?.signal,
+          deadlineAt: currentOperation()?.deadlineAt,
+          cursor: params.cursor,
           form: 'SUPPLIERS',
           query: params.query,
           fields: SUPPLIERS?.searchFields ?? ['SUPDES', 'SUPNAME'],

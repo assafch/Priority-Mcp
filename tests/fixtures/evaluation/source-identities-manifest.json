@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "version": "synthetic-source-identities-v1",
+  "sidecarFile": "source-identities.json",
+  "sha256": "3792c355a93d2747aa7b3cd807f0556e76d8a15f0f124fff82a6a755479ea9eb",
+  "baseFixtureVersion": "2026-10-25-frozen-v2",
+  "baseFixtureHashes": {
+    "development.json": "b709c743288525dfc40a0bd6f478bfbe0078268801a383b2e420ac5126da96ce",
+    "held-out.json": "a740f19ab1cf613505400617eb475291429ce65c1c9fa1ef1dab363c97b4cf73"
+  },
+  "effectiveInputsChanged": true,
+  "reviewStatus": "approved by independent source identity review on 2026-10-25; effective protocol inputs changed"
+}

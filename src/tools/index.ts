@@ -7,6 +7,7 @@ import { registerCapabilityTools } from './capabilities.js';
 import { registerCustomerTools } from './customers.js';
 import { registerDebtTools } from './debts.js';
 import { registerDocumentTools } from './documents.js';
+import { registerEntityResolutionTools } from './entity-resolution.js';
 import { registerFinanceTools } from './finance.js';
 import { registerGenericTools } from './generic.js';
 import { registerBondedTools } from './impfiles-bonded.js';
@@ -16,14 +17,19 @@ import { registerMetaTools } from './meta.js';
 import { registerOrderTools } from './orders.js';
 import { registerProductTools } from './products.js';
 import { registerPurchaseOrderTools } from './purchase-orders.js';
+import { registerQueryPlanningTools } from './query-planning.js';
 import { registerSalesReportTools } from './sales-report.js';
 import { registerSupplierTools } from './suppliers.js';
 import { registerWarehouseTools } from './warehouses.js';
+import { registerReadWorkflowTools } from './workflows.js';
 
 export function registerAllTools(server: McpServer, client: PriorityClient, config: Config) {
-  const gated = toolRegistry(server, config);
+  const gated = toolRegistry(server, config, client.metrics);
 
   registerCapabilityTools(gated, client, config);
+  registerQueryPlanningTools(gated, client);
+  registerEntityResolutionTools(gated, client, config);
+  registerReadWorkflowTools(gated, client, config);
 
   // Generic, form-agnostic building blocks (discovery + read + guarded write).
   registerGenericTools(gated, client, config);
@@ -34,7 +40,7 @@ export function registerAllTools(server: McpServer, client: PriorityClient, conf
   registerInvoiceTools(gated, client, config);
   registerOrderTools(gated, client, config);
   registerProductTools(gated, client, config);
-  registerSalesReportTools(gated, client);
+  registerSalesReportTools(gated, client, config);
   registerWarehouseTools(gated, client);
   registerSupplierTools(gated, client);
   registerPurchaseOrderTools(gated, client, config);

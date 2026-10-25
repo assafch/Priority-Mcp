@@ -1,0 +1,10 @@
+{
+  "records": [
+    {"CUSTNAME":"0012","CUSTDES":"דוגמית סחר"},
+    {"CUSTNAME":"12","CUSTDES":"דוגמית מסחר"},
+    {"CUSTNAME":"C3","CUSTDES":"יעד אריזה בעמ"},
+    {"CUSTNAME":"C4","CUSTDES":"יעד אריזה צפון בעמ"},
+    {"CUSTNAME":"C5","CUSTDES":"Blue River Trading"}
+  ],
+  "aliases": [{"alias":"בית כחול","id":"C5"},{"alias":"יעד","id":"C3"},{"alias":"יעד","id":"C4"}]
+}

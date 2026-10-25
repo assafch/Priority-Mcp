@@ -4,9 +4,9 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { parseCsdl } from '../lib/csdl.js';
 import { filterForms, listExposedForms } from '../lib/forms.js';
 import { resolveRecordKey } from '../lib/record-key.js';
+import { knowledgeFor } from '../lib/schema-service.js';
 import { checkWriteAllowed, dryRunRequest, textResult } from '../lib/write-guard.js';
 import {
   verifyLineCreate,
@@ -101,16 +101,10 @@ priority_describe_form.`,
     },
     async (params) => {
       try {
-        const metadata = await client.getMetadataFor<unknown>(params.entity);
-        // Priority returns CSDL — XML normally, JSON on some responses. Parse either into clean
-        // JSON (fields with type/title/mandatory, key, sub-forms); fall back to raw on a miss.
-        const parsed = parseCsdl(metadata, params.entity);
-        if (parsed) return textResult(parsed);
-        return textResult({
-          entity: params.entity,
-          note: 'Returned metadata could not be parsed into fields; raw CSDL follows (truncated).',
-          raw: typeof metadata === 'string' ? metadata.slice(0, 4000) : metadata,
+        const { schema, evidence } = await knowledgeFor(client).schemas.get(params.entity, {
+          purpose: 'read',
         });
+        return textResult({ ...schema, meta: evidence });
       } catch (err) {
         throw toMcpError(err);
       }

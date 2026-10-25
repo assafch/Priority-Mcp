@@ -2,7 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
 const capabilityCheck =
-  'First call priority_get_capabilities for the relevant domains, following nextSkip until all needed entries are read. If policy blocks that tool, use tools/list descriptions and report capability evidence as unknown. Use only enabled, implemented tools; a guide does not execute its procedure. If a required source is unavailable, name the missing evidence instead of inventing totals. Do not send messages or write ERP records as part of this report.';
+  'Use fresh capability evidence for the specific tools needed. When evidence is missing or expired, call priority_get_capabilities with names and view=summary for those tools; refresh only when runtime support is needed. If policy blocks that tool, use tools/list descriptions and report capability evidence as unknown. Use only enabled, implemented tools; a guide does not execute its procedure. If a required source is unavailable, name the missing evidence instead of inventing totals. Do not send messages or write ERP records as part of this report.';
 const message = (text: string) => ({
   messages: [
     {

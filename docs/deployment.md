@@ -38,3 +38,7 @@ Container binding must be `0.0.0.0` for port forwarding; host publishing above s
 5. For a software rollback restore the previous artifact/lock/config and restart that host. This does not reverse ERP transactions.
 
 Cloud Run/Railway or other deployments require explicit host, port, token and TLS/ingress configuration. No public deployment is implied by these examples.
+
+## Unreleased runtime update
+
+See [rollout and rollback](performance-rollout.md) before activating the new runtime. The default account attempt budget is90/minute, with 4 active and 100 pending. `PRIORITY_TOOL_PROFILE=operations` is opt-in; full legacy discovery is default. Account-scope rate sharing never merges credential-specific caches. No live deployment is implied by local tests.

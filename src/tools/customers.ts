@@ -10,6 +10,7 @@ import { searchForm } from '../lib/search.js';
 import type { PriorityCustomer } from '../lib/types.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
 import { verifyRecordCreate, verifyRecordUpdate } from '../lib/write-verification.js';
+import { currentOperation } from '../runtime/operation-context.js';
 
 const CUSTOMERS = getSchema('CUSTOMERS');
 const CUST_SEARCH_FIELDS = CUSTOMERS?.searchFields ?? ['CUSTDES', 'CUSTNAME'];
@@ -54,6 +55,10 @@ Example queries an AI might need:
 - "Customers with balance over 10000" → minBalance: 10000
 - "First 10 customers for sales rep Dan" → salesRep: "Dan", top: 10`,
     {
+      cursor: z
+        .string()
+        .optional()
+        .describe('Server-owned search continuation; repeat the same search arguments.'),
       status: z
         .string()
         .optional()
@@ -82,7 +87,7 @@ Example queries an AI might need:
       orderBy: z.enum(['CUSTNAME', 'CUSTDES']).default('CUSTNAME').describe('Field to sort by'),
       orderDir: z.enum(['asc', 'desc']).default('asc').describe('Sort direction'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
         const baseFilters: string[] = [];
         if (params.status) baseFilters.push(`STATDES eq '${escapeODataString(params.status)}'`);
@@ -97,6 +102,9 @@ Example queries an AI might need:
             baseFilters.push(`AGENTNAME eq '${escapeODataString(params.salesRep)}'`);
           }
           const { value, meta } = await searchForm<PriorityCustomer>(client, {
+            signal: extra?.signal ?? currentOperation()?.signal,
+            deadlineAt: currentOperation()?.deadlineAt,
+            cursor: params.cursor,
             form: 'CUSTOMERS',
             query: (params.search ?? params.salesRep) as string,
             fields: usingSearch ? CUST_SEARCH_FIELDS : ['AGENTNAME'],
@@ -179,12 +187,19 @@ Returns all fields including contacts, balance, credit limit, and metadata.`,
 Use this when you don't know the exact CUSTNAME. Searches across multiple fields.
 Returns up to 20 matches by default. Use priority_get_customer for full details once you find the right one.`,
     {
+      cursor: z
+        .string()
+        .optional()
+        .describe('Server-owned search continuation; repeat the same search arguments.'),
       query: z.string().min(1).describe('Search term — matches against name, tax ID, phone, email'),
       top: z.number().int().min(1).max(100).default(20).describe('Max results'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
         const { value, meta } = await searchForm<PriorityCustomer>(client, {
+          signal: extra?.signal ?? currentOperation()?.signal,
+          deadlineAt: currentOperation()?.deadlineAt,
+          cursor: params.cursor,
           form: 'CUSTOMERS',
           query: params.query,
           fields: CUST_SEARCH_FIELDS,

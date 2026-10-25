@@ -132,6 +132,17 @@ const rows: Array<
   ['priority_update_line', 'generic', 'write', 'implemented', []],
   ['priority_get_capabilities', 'meta', 'read', 'implemented', []],
   ['priority_healthcheck', 'meta', 'read', 'implemented', []],
+  ['priority_prepare_query', 'generic', 'read', 'implemented', []],
+  ['priority_resolve_entity', 'generic', 'read', 'implemented', []],
+  [
+    'priority_customer_snapshot',
+    'workflows',
+    'read',
+    'implemented',
+    ['CUSTOMERS', 'ORDERS', 'AINVOICES', 'OBLIGO'],
+  ],
+  ['priority_order_diagnosis', 'workflows', 'read', 'implemented', ['ORDERS']],
+  ['priority_import_diagnosis', 'workflows', 'read', 'implemented', ['IMPFILES']],
 ];
 export const TOOL_DEFINITIONS: ToolDefinition[] = rows.map(
   ([name, domain, mode, implementation, requiredForms]) => ({

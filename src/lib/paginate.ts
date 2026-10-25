@@ -14,7 +14,8 @@ export interface PageScan<T> {
     | 'maxRows'
     | 'continuationUnavailable'
     | 'continuationLoop'
-    | 'cancelled';
+    | 'cancelled'
+    | 'deadline';
   nextCursor?: { nextLink?: string; skip?: number };
   mode: 'skip' | 'nextLink' | 'mixed';
 }
@@ -31,6 +32,7 @@ export async function fetchAllPages<T>(
     maxRows?: number;
     fetchNext?: (nextLink: string) => Promise<PageEnvelope<T>>;
     signal?: AbortSignal;
+    deadlineAt?: number;
   } = {},
 ): Promise<PageScan<T>> {
   const pageSize = opts.pageSize ?? 500;
@@ -61,19 +63,32 @@ export async function fetchAllPages<T>(
     ...(nextCursor ? { nextCursor } : {}),
     mode: usedNext ? (usedSkip ? 'mixed' : 'nextLink') : 'skip',
   });
+  const interrupted = (): 'cancelled' | 'deadline' | undefined =>
+    opts.signal?.aborted && (opts.deadlineAt === undefined || Date.now() < opts.deadlineAt)
+      ? 'cancelled'
+      : opts.deadlineAt !== undefined && Date.now() >= opts.deadlineAt
+        ? 'deadline'
+        : undefined;
   for (;;) {
-    if (opts.signal?.aborted) return done('cancelled', link ? { nextLink: link } : { skip });
+    const reason = interrupted();
+    if (reason) return done(reason, link ? { nextLink: link } : { skip });
     let result: T[] | PageEnvelope<T>;
-    if (link) {
-      if (!opts.fetchNext) return done('continuationUnavailable', { nextLink: link });
-      if (seen.has(link)) return done('continuationLoop', { nextLink: link });
-      seen.add(link);
-      usedNext = true;
-      result = await opts.fetchNext(link);
-    } else {
-      // The first request is common to both modes; only subsequent offset probes count as skip.
-      if (pages) usedSkip = true;
-      result = await fetchPage(skip, Math.min(pageSize, maxRows - rows.length));
+    try {
+      if (link) {
+        if (!opts.fetchNext) return done('continuationUnavailable', { nextLink: link });
+        if (seen.has(link)) return done('continuationLoop', { nextLink: link });
+        seen.add(link);
+        usedNext = true;
+        result = await opts.fetchNext(link);
+      } else {
+        // The first request is common to both modes; only subsequent offset probes count as skip.
+        if (pages) usedSkip = true;
+        result = await fetchPage(skip, Math.min(pageSize, maxRows - rows.length));
+      }
+    } catch (err) {
+      const reason = interrupted();
+      if (reason) return done(reason, link ? { nextLink: link } : { skip });
+      throw err;
     }
     pages++;
     const arrayMode = Array.isArray(result);
@@ -82,6 +97,8 @@ export async function fetchAllPages<T>(
     const remaining = maxRows - rows.length;
     rows.push(...page.slice(0, remaining));
     skip += Math.min(page.length, remaining);
+    const stopped = interrupted();
+    if (stopped) return done(stopped, next ? { nextLink: next } : { skip });
     // A server that ignores $top must not silently discard the rest of an oversized page.
     if (page.length > remaining) return done('maxRows', { skip });
     if (!next && (page.length === 0 || (arrayMode && page.length < Math.min(pageSize, remaining))))
