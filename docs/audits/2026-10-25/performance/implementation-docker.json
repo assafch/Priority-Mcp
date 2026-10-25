@@ -1,0 +1,9 @@
+{
+  "image": "priority-mcp-faster-smarter:20261025",
+  "imageId": "sha256:cbb5c38f933dc318364793d82e57b67e218b36a9e1dd341edcabb0b04d214bcd",
+  "health": 200,
+  "anonymousMcp": 401,
+  "authenticatedInitialize": 200,
+  "serverInfoVerified": true,
+  "liveErpCalls": 0
+}

@@ -1,6 +1,6 @@
 # Faster and smarter MCP — verification record
 
-Implementation date: 2026-10-25. Baseline: `29f89590b567db66949564ac2c083d65dfc6f772` (0.2.0). Implementation branch: `codex/mcp-faster-smarter-20261025`. Core source and independent review are complete; final clean-revision benchmark/evaluation recording is in progress.
+Implementation date: 2026-10-25. Baseline: `29f89590b567db66949564ac2c083d65dfc6f772` (0.2.0). Implementation branch: `codex/mcp-faster-smarter-20261025`. Status: **offline-complete / live-performance-unverified**. Source implementation: `3a1e7a9b8cb99c700ebb6e312dab4095c8ee370a`; measured with a clean Git tree. Independent review and the final offline verification passed.
 
 ## Scope and result boundary
 
@@ -24,7 +24,23 @@ No `.env` was read or copied. No live ERP request/write, message send, deploymen
 
 Docker image: `sha256:cbb5c38f933dc318364793d82e57b67e218b36a9e1dd341edcabb0b04d214bcd`. The synthetic test container was removed after verification. Source package remains unreleased 0.2.0; no package publication occurred.
 
-Final clean-revision measurement artifacts and local integration revision will be recorded in the evidence commit.
+## Final measured results
+
+All nine maintained workloads ran 50 samples on clean source revision `3a1e7a9`, Node 26.4.0, Apple M5 / darwin arm64. These are local synthetic measurements; artifacts include the exact machine/runtime/cache/transport state.
+
+| Result | Evidence |
+| --- | --- |
+| Identical read burst | 20 concurrent cacheable reads -> 1 backend call in every sample (50/50) |
+| Compact operations manifest | 25 tools, 32,583 bytes vs 110 tools / 126,997 bytes in full: 74.3% fewer JSON bytes |
+| Warm cached lookup | p95 0.027 ms; zero backend calls; target <50 ms |
+| 1.1 MiB result formatter | p95 4.894 ms; target <30 ms |
+| Short-page search | Finds the existing record at row 250 in every sample; 5 backend calls per sample |
+| Engine evaluation | 120/120: development 80/80, held-out 40/40 under the disclosed identity sidecar |
+| Raw-fixture negative control | With sidecar disabled, 11 unverified-identity sales fixtures fail the old completeness/total expectations; 109/120 pass. This is expected and demonstrates the guard remains active. |
+
+[Benchmark artifact](performance/implementation-benchmark.json), [engine evaluation](performance/implementation-evaluation.json), [raw-fixture negative control](performance/implementation-evaluation-raw-negative-control.json), [Docker smoke](performance/implementation-docker.json).
+
+The full manifest grew to accommodate additive tools and evidence schemas. Compact-profile byte reduction is not a measured token or model-quality gain. The historical planning baseline uses a different measurement fixture; no cross-fixture p95 speedup is claimed. Local integration is a fast-forward from the original baseline; the evidence commit changes documentation/artifacts only. Original untracked planning files are preserved in an external local backup before integration.
 
 ## Independent review and repairs
 

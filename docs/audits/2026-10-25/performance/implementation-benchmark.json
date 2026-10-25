@@ -1,0 +1,295 @@
+{
+  "schemaVersion": 1,
+  "observedAt": "2026-10-25T10:24:15.631Z",
+  "kind": "synthetic-offline-maintained-benchmark",
+  "livePriority": false,
+  "revision": "3a1e7a9b8cb99c700ebb6e312dab4095c8ee370a",
+  "dirty": false,
+  "node": "v26.4.0",
+  "platform": "darwin",
+  "release": "25.6.0",
+  "arch": "arm64",
+  "cpu": "Apple M5",
+  "fixture": "priority-synthetic-offline-v1",
+  "fixtureVersion": 1,
+  "results": [
+    {
+      "name": "startup-and-list-tools",
+      "mode": "in-memory",
+      "state": "cold-server-warm-imports",
+      "latencyMs": {
+        "samples": 50,
+        "min": 8.417124999999942,
+        "p50": 9.687917000000027,
+        "p95": 12.600749999999977,
+        "max": 42.52712500000001,
+        "mean": 10.620550899999996
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 126997,
+        "p50": 126997,
+        "p95": 126997,
+        "max": 126997,
+        "mean": 126997
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      }
+    },
+    {
+      "name": "startup-and-list-tools",
+      "mode": "process-stdio",
+      "state": "cold-process",
+      "latencyMs": {
+        "samples": 50,
+        "min": 123.70937500000014,
+        "p50": 126.92849999999999,
+        "p95": 141.39791700000023,
+        "max": 190.40737500000023,
+        "mean": 129.87398332000004
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 126997,
+        "p50": 126997,
+        "p95": 126997,
+        "max": 126997,
+        "mean": 126997
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      }
+    },
+    {
+      "name": "list-tools",
+      "mode": "in-memory",
+      "state": "warm-server",
+      "latencyMs": {
+        "samples": 50,
+        "min": 7.545334000000366,
+        "p50": 8.01141699999971,
+        "p95": 8.56787500000064,
+        "max": 8.782916999999543,
+        "mean": 8.016899140000005
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 126997,
+        "p50": 126997,
+        "p95": 126997,
+        "max": 126997,
+        "mean": 126997
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      }
+    },
+    {
+      "name": "capabilities-all-pages",
+      "mode": "in-memory",
+      "state": "warm-server",
+      "latencyMs": {
+        "samples": 50,
+        "min": 0.6100829999995767,
+        "p50": 0.6464169999999285,
+        "p95": 0.9922090000000026,
+        "max": 5.666667000000416,
+        "mean": 0.7827791600000091
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 98492,
+        "p50": 98492,
+        "p95": 98492,
+        "max": 98492,
+        "mean": 98492
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      }
+    },
+    {
+      "name": "list-tools-operations",
+      "mode": "in-memory",
+      "state": "warm-server",
+      "latencyMs": {
+        "samples": 50,
+        "min": 3.505374999999731,
+        "p50": 4.1118749999996,
+        "p95": 9.884041999999681,
+        "max": 14.648291999999856,
+        "mean": 4.650225779999928
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 32583,
+        "p50": 32583,
+        "p95": 32583,
+        "max": 32583,
+        "mean": 32583
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      }
+    },
+    {
+      "name": "cached-lookup",
+      "mode": "in-memory-client",
+      "state": "warm-response-cache",
+      "latencyMs": {
+        "samples": 50,
+        "min": 0.0033329999996567494,
+        "p50": 0.004874999999628926,
+        "p95": 0.026458000000275206,
+        "max": 0.0700829999996131,
+        "mean": 0.008978360000055545
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 56,
+        "p50": 56,
+        "p95": 56,
+        "max": 56,
+        "mean": 56
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      }
+    },
+    {
+      "name": "concurrent-identical-reads-20",
+      "mode": "in-memory-client",
+      "state": "cold-response-cache",
+      "latencyMs": {
+        "samples": 50,
+        "min": 0.0805000000000291,
+        "p50": 0.12266600000020844,
+        "p95": 0.24808399999983521,
+        "max": 0.46495900000081747,
+        "mean": 0.14320586000007096
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 1141,
+        "p50": 1141,
+        "p95": 1141,
+        "max": 1141,
+        "mean": 1141
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 1,
+        "p50": 1,
+        "p95": 1,
+        "max": 1,
+        "mean": 1
+      }
+    },
+    {
+      "name": "short-page-search-row-250",
+      "mode": "in-memory-client",
+      "state": "cold-response-cache",
+      "latencyMs": {
+        "samples": 50,
+        "min": 0.24549999999999272,
+        "p50": 0.2892499999998108,
+        "p95": 0.4279999999998836,
+        "max": 1.391458000000057,
+        "mean": 0.3362300200000027
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 213,
+        "p50": 213,
+        "p95": 213,
+        "max": 213,
+        "mean": 213
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 5,
+        "p50": 5,
+        "p95": 5,
+        "max": 5,
+        "mean": 5
+      }
+    },
+    {
+      "name": "formatter-1MiB",
+      "mode": "in-memory-formatter",
+      "state": "warm-imports",
+      "inputBytes": 1106869,
+      "latencyMs": {
+        "samples": 50,
+        "min": 3.222917000000052,
+        "p50": 3.4709579999998823,
+        "p95": 4.893833000000086,
+        "max": 5.70154199999979,
+        "mean": 3.6697059000000083
+      },
+      "payloadBytes": {
+        "samples": 50,
+        "min": 35990,
+        "p50": 35990,
+        "p95": 35990,
+        "max": 35990,
+        "mean": 35990
+      },
+      "backendCalls": {
+        "samples": 50,
+        "min": 0,
+        "p50": 0,
+        "p95": 0,
+        "max": 0,
+        "mean": 0
+      }
+    }
+  ],
+  "correctness": {
+    "shortPageMatchIndex": 250,
+    "reportTotal": 140
+  },
+  "exclusions": [
+    "ERP/network latency",
+    "host/model turns and token usage",
+    "disk-cold module/OS caches",
+    "live rate-limit behavior"
+  ],
+  "notes": [
+    "50 measured samples per workload; no discarded warmup samples.",
+    "Process timings include stdio initialization and shutdown; in-memory imports are already warm.",
+    "Payload bytes are serialized JSON bytes, not tokens. Catalog serializedResultBytes measures every tool response.",
+    "Historical planning baseline is separate: docs/audits/2026-10-25/performance/baseline.json."
+  ]
+}
