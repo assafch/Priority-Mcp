@@ -6,7 +6,14 @@ import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { parseCsdl } from '../lib/csdl.js';
 import { filterForms, listExposedForms } from '../lib/forms.js';
+import { resolveRecordKey } from '../lib/record-key.js';
 import { checkWriteAllowed, dryRunRequest, textResult } from '../lib/write-guard.js';
+import {
+  verifyLineCreate,
+  verifyRecordCreate,
+  verifyRecordUpdate,
+  verifyWrite,
+} from '../lib/write-verification.js';
 
 /**
  * Generic, form-agnostic building-block tools that work against ANY Priority form.
@@ -204,7 +211,13 @@ For large forms, pass 'select' to project only the fields you need — unproject
           form: params.form,
           count: rows.length,
           value: rows,
-          hasMore: rows.length === params.top,
+          hasMore: result['@odata.nextLink'] ? true : rows.length === params.top ? true : null,
+          nextLink: result['@odata.nextLink'] ?? null,
+          continuationMode: result['@odata.nextLink'] ? 'nextLink' : 'skip',
+          completeness: 'unknown',
+          note: result['@odata.nextLink']
+            ? 'Continuation supplied by Priority.'
+            : 'Page length alone does not prove completeness; continue with a stable key order and skip if a full scan is required.',
         });
       } catch (err) {
         throw toMcpError(err);
@@ -218,10 +231,14 @@ For large forms, pass 'select' to project only the fields you need — unproject
 
 The key is the value of the form's key field (usually a string, e.g. CUSTNAME 'C1001',
 IVNUM '12345', ORDNAME 'SO24000001'). Optionally $select specific fields or $expand sub-forms.
-For forms with COMPOSITE keys, use priority_query with a $filter on the key fields instead.`,
+For composite keys supply keys with every key field. Supply exactly one of key or keys.`,
     {
       form: z.string().min(1).describe("Form/entity name, e.g. 'CUSTOMERS'"),
-      key: z.string().min(1).describe("Key value of the record, e.g. 'C1001'"),
+      key: z.string().min(1).optional().describe("Key value of the record, e.g. 'C1001'"),
+      keys: z
+        .record(z.string(), z.union([z.string(), z.number().finite()]))
+        .optional()
+        .describe('Named key fields; provide exactly one of key or keys'),
       select: z.array(z.string()).optional().describe('Field names to return (omit for all)'),
       expand: z.array(z.string()).optional().describe('Sub-forms to expand inline'),
     },
@@ -231,7 +248,8 @@ For forms with COMPOSITE keys, use priority_query with a $filter on the key fiel
         if (params.select?.length) qb.select(...params.select);
         if (params.expand?.length) qb.expand(...params.expand);
         const query = qb.build();
-        const record = await client.get(params.form, params.key, query || undefined);
+        const key = await resolveRecordKey(client, params.form, params.key, params.keys);
+        const record = await client.get(params.form, key, query || undefined);
         return textResult(record);
       } catch (err) {
         throw toMcpError(err);
@@ -265,7 +283,7 @@ Set confirm=true to actually create (also blocked entirely when PRIORITY_READ_ON
     {
       form: z.string().min(1).describe("Form/entity name, e.g. 'AINVOICES'"),
       data: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .describe('Header fields, plus optional sub-form arrays for deep-insert (see example).'),
       confirm: z
         .boolean()
@@ -278,8 +296,8 @@ Set confirm=true to actually create (also blocked entirely when PRIORITY_READ_ON
       const guard = checkWriteAllowed(config);
       if (guard.blocked) return guard.result;
       try {
-        const result = await client.create(params.form, params.data);
-        return textResult({ created: true, form: params.form, result });
+        const outcome = await verifyRecordCreate(client, params.form, params.data);
+        return textResult({ created: outcome.verified, form: params.form, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -295,9 +313,13 @@ SAFETY: confirm defaults to false -> dry-run preview of the exact PATCH endpoint
 Set confirm=true to actually update (also blocked when PRIORITY_READ_ONLY=true).`,
     {
       form: z.string().min(1).describe("Form/entity name, e.g. 'CUSTOMERS'"),
-      key: z.string().min(1).describe("Key value of the record to update, e.g. 'C1001'"),
+      key: z.string().min(1).optional().describe("Key value of the record to update, e.g. 'C1001'"),
+      keys: z
+        .record(z.string(), z.union([z.string(), z.number().finite()]))
+        .optional()
+        .describe('Named key fields; provide exactly one of key or keys'),
       data: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .describe('Object of fields to change, e.g. { "PHONE": "03-1234567" }'),
       confirm: z
         .boolean()
@@ -305,13 +327,16 @@ Set confirm=true to actually update (also blocked when PRIORITY_READ_ONLY=true).
         .describe('false = dry-run preview (default); true = actually PATCH'),
     },
     async (params) => {
-      const endpoint = client.resolveEntityUrl(params.form, params.key);
+      const key = await resolveRecordKey(client, params.form, params.key, params.keys, true);
+      if (!Object.keys(params.data).length) throw toMcpError(new Error('No fields to update.'));
+      const endpoint = client.resolveEntityUrl(params.form, key);
       if (!params.confirm) return dryRunRequest('PATCH', endpoint, params.data);
       const guard = checkWriteAllowed(config);
       if (guard.blocked) return guard.result;
       try {
-        const result = await client.update(params.form, params.key, params.data);
-        return textResult({ updated: true, form: params.form, key: params.key, result });
+        await resolveRecordKey(client, params.form, params.key, params.keys);
+        const outcome = await verifyRecordUpdate(client, params.form, key, params.data);
+        return textResult({ updated: outcome.verified, form: params.form, key, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -331,13 +356,17 @@ SAFETY: confirm defaults to false -> dry-run preview of the exact POST endpoint 
 Set confirm=true to actually add the line (also blocked when PRIORITY_READ_ONLY=true).`,
     {
       form: z.string().min(1).describe("Parent form/entity name, e.g. 'ORDERS'"),
-      key: z.string().min(1).describe("Key of the parent record, e.g. 'SO24000001'"),
+      key: z.string().min(1).optional().describe("Key of the parent record, e.g. 'SO24000001'"),
+      keys: z
+        .record(z.string(), z.union([z.string(), z.number().finite()]))
+        .optional()
+        .describe('Named key fields; provide exactly one of key or keys'),
       subform: z
         .string()
         .min(1)
         .describe("Sub-form navigation property, e.g. 'ORDERITEMS_SUBFORM'"),
       data: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .describe('The line fields, e.g. { "PARTNAME": "P-100", "TQUANT": 3 }'),
       confirm: z
         .boolean()
@@ -345,18 +374,76 @@ Set confirm=true to actually add the line (also blocked when PRIORITY_READ_ONLY=
         .describe('false = dry-run preview (default); true = actually POST'),
     },
     async (params) => {
-      const endpoint = client.resolveSubformUrl(params.form, params.key, params.subform);
+      const key = await resolveRecordKey(client, params.form, params.key, params.keys, true);
+      const endpoint = client.resolveSubformUrl(params.form, key, params.subform);
       if (!params.confirm) return dryRunRequest('POST', endpoint, params.data);
       const guard = checkWriteAllowed(config);
       if (guard.blocked) return guard.result;
       try {
-        const result = await client.addLine(params.form, params.key, params.subform, params.data);
+        await resolveRecordKey(client, params.form, params.key, params.keys);
+        const outcome = await verifyLineCreate(
+          client,
+          params.form,
+          key,
+          params.subform,
+          params.data,
+        );
         return textResult({
-          added: true,
+          added: outcome.verified,
           form: params.form,
-          key: params.key,
+          key,
           subform: params.subform,
-          result,
+          ...outcome,
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
+    },
+  );
+  server.tool(
+    'priority_update_line',
+    'PATCH one identified sub-form row. Exactly one of key/keys identifies the parent; lineKeys identifies the row. Preview is the default; success requires uncached matching readback.',
+    {
+      form: z.string().min(1),
+      key: z.string().min(1).optional(),
+      keys: z.record(z.string(), z.union([z.string(), z.number().finite()])).optional(),
+      subform: z.string().min(1),
+      lineKeys: z.record(z.string(), z.union([z.string(), z.number().finite()])),
+      data: z.record(z.string(), z.unknown()),
+      confirm: z.boolean().default(false),
+    },
+    async (params) => {
+      try {
+        const key = await resolveRecordKey(client, params.form, params.key, params.keys, true);
+        if (!Object.keys(params.data).length) throw new Error('No fields to update.');
+        const endpoint = client.resolveSubformRowUrl(
+          params.form,
+          key,
+          params.subform,
+          params.lineKeys,
+        );
+        if (!params.confirm) return dryRunRequest('PATCH', endpoint, params.data);
+        const guard = checkWriteAllowed(config);
+        if (guard.blocked) return guard.result;
+        await resolveRecordKey(client, params.form, params.key, params.keys);
+        // Validate row key fields against the sub-form's metadata before a real write.
+        await resolveRecordKey(client, params.subform, undefined, params.lineKeys);
+        const outcome = await verifyWrite(
+          () =>
+            client.updateSubformRow(params.form, key, params.subform, params.lineKeys, params.data),
+          () =>
+            client.getSubformRow(params.form, key, params.subform, params.lineKeys, undefined, {
+              cache: false,
+            }),
+          params.data,
+        );
+        return textResult({
+          updated: outcome.verified,
+          form: params.form,
+          key,
+          subform: params.subform,
+          lineKeys: params.lineKeys,
+          ...outcome,
         });
       } catch (err) {
         throw toMcpError(err);

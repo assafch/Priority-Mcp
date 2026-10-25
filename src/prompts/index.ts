@@ -1,129 +1,69 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 
+const capabilityCheck =
+  'First call priority_get_capabilities for the relevant domains, following nextSkip until all needed entries are read. If policy blocks that tool, use tools/list descriptions and report capability evidence as unknown. Use only enabled, implemented tools; a guide does not execute its procedure. If a required source is unavailable, name the missing evidence instead of inventing totals. Do not send messages or write ERP records as part of this report.';
+const message = (text: string) => ({
+  messages: [
+    {
+      role: 'user' as const,
+      content: { type: 'text' as const, text: `${capabilityCheck}\n\n${text}` },
+    },
+  ],
+});
+
 export function registerAllPrompts(server: McpServer) {
   server.prompt(
     'debt_collection_workflow',
-    `Step-by-step debt collection workflow for a specific customer.
-Guides the AI through: checking aging → reviewing payment history → drafting collection approach → suggesting next action.`,
-    { customerId: z.string().describe('CUSTNAME of the customer to collect from') },
-    (params) => ({
-      messages: [
-        {
-          role: 'user',
-          content: {
-            type: 'text',
-            text: `Run a debt collection workflow for customer "${params.customerId}". Follow these steps:
-
-1. **Check aging**: Call priority_get_customer_aging for this customer. Summarize how much is in each bucket (0-30, 31-60, 61-90, 90+).
-2. **Review payment history**: Call priority_get_payment_history to understand their typical payment behavior (avg days to pay).
-3. **Check recent activities**: Call priority_get_customer_activities to see if there have been recent collection attempts.
-4. **Get contact info**: Call priority_get_customer_contacts to find the right person to reach out to.
-5. **Draft approach**: Based on the above, recommend:
-   - Urgency level (low/medium/high/critical)
-   - Suggested communication channel (email/phone/letter)
-   - Talking points for the conversation
-   - Whether to offer a payment plan
-6. **Suggest next action**: Recommend scheduling a follow-up using priority_schedule_followup.`,
-          },
-        },
-      ],
-    }),
+    'Evidence-based collection review and draft next action.',
+    { customerId: z.string().describe('CUSTNAME') },
+    (p) =>
+      message(`Review customer ${JSON.stringify(p.customerId)}:
+1. Read priority_get_customer_balance and priority_get_unpaid_invoices_for_customer. Report scan completeness. Unreconciled invoice face values are not verified remaining balances.
+2. Read priority_get_customer_contacts for a draft contact approach. Do not contact anyone.
+3. Use aging, payment history and activity tools only if their capability entries show an implemented, enabled route; otherwise state that due dates, actual payments or CRM history are unavailable.
+4. Draft one next action using the verified evidence. A receipt or ledger entry does not prove bank clearing; payment-plan decisions need the user.`),
   );
-
   server.prompt(
     'daily_briefing',
-    `Morning briefing: overnight orders, overdue invoices, low stock alerts, and cash position.
-Produces a concise executive summary to start the day.`,
+    'Orders, ledger cash, debt and available inventory evidence.',
     {},
-    () => ({
-      messages: [
-        {
-          role: 'user',
-          content: {
-            type: 'text',
-            text: `Generate a daily business briefing. Gather the following data and present a concise summary:
-
-1. **New Orders**: Call priority_list_orders with dateFrom=yesterday, dateTo=today. Summarize count and total value.
-2. **Overdue Invoices**: Call priority_get_overdue_invoices. Highlight the top 5 most overdue by amount.
-3. **Cash Position**: Call priority_get_cash_position. Show total cash across all accounts.
-4. **Low Stock Alerts**: Call priority_get_low_stock_alerts. List any critical items below reorder point.
-5. **Top Debtors**: Call priority_get_top_debtors with top=5. Show who owes the most.
-6. **Open Tasks**: Call priority_get_open_tasks with top=10. List upcoming tasks due today/this week.
-
-Format as a clean briefing with sections, totals, and action items.`,
-          },
-        },
-      ],
-    }),
+    () =>
+      message(`Produce a daily briefing:
+1. Read priority_list_orders for the explicit date range and page before claiming totals.
+2. Read priority_get_cash_position and priority_get_top_debtors. Label cash figures as Priority GL balances with their currencies and sign convention.
+3. Use overdue, low-stock and task tools only when implemented and enabled; otherwise list those gaps. Never substitute uninvoiced delivery documents for debt.
+4. Give the top five findings and one concrete next action, identifying every incomplete scan.`),
   );
-
   server.prompt(
     'cash_position_summary',
-    'Cash position snapshot with AR/AP projection.',
-    { periodDays: z.string().default('30').describe('Days ahead to project (default 30)') },
-    (params) => ({
-      messages: [
-        {
-          role: 'user',
-          content: {
-            type: 'text',
-            text: `Generate a cash position summary with ${params.periodDays}-day projection:
-
-1. Call priority_get_cash_position for current balances.
-2. Call priority_get_cashflow_projection with daysAhead=${params.periodDays}.
-3. Call priority_get_ar_aging_summary and priority_get_ap_aging_summary.
-
-Present: current cash, expected inflows, expected outflows, net projection, and any concerns.`,
-          },
-        },
-      ],
-    }),
+    'Ledger cash snapshot with conditional due-date projection.',
+    { periodDays: z.string().default('30').describe('Days ahead') },
+    (p) =>
+      message(`Review the next ${JSON.stringify(p.periodDays)} days:
+1. Read priority_get_cash_position and preserve each currency. These are GL balances, not bank-confirmed available funds.
+2. Use cash-flow and AR/AP aging tools only if implemented and enabled with verified due-date/open-item sources.
+3. If those sources are missing, report projection unavailable and name the required evidence. Do not invent inflows, outflows or a net projection.`),
   );
-
   server.prompt(
     'order_fulfillment_check',
-    'Check if an order can be fulfilled: stock availability, delivery estimate, potential issues.',
-    { orderId: z.string().describe('ORDNAME to check') },
-    (params) => ({
-      messages: [
-        {
-          role: 'user',
-          content: {
-            type: 'text',
-            text: `Check fulfillment readiness for order "${params.orderId}":
-
-1. Call priority_get_order to get order details and line items.
-2. For each line item, call priority_get_stock_levels to check availability.
-3. Flag any items with insufficient stock.
-4. Check priority_get_incoming_shipments for any POs that might cover shortages.
-5. Summarize: can this order ship completely? If not, what's missing and when might it arrive?`,
-          },
-        },
-      ],
-    }),
+    'Check order readiness using stock and incoming-order evidence.',
+    { orderId: z.string().describe('ORDNAME') },
+    (p) =>
+      message(`Review order ${JSON.stringify(p.orderId)}:
+1. Read priority_get_order and priority_get_stock_levels for each line and relevant warehouse.
+2. Read priority_get_incoming_shipments for shortages; expected dates are estimates.
+3. Report stock gaps and source coverage. A closed order, shipment assignment or carrier pickup does not prove delivery to the customer.`),
   );
-
   server.prompt(
     'inventory_reorder_check',
-    'Identify products needing reorder and suggest quantities based on sales velocity.',
+    'Inventory review using verified stock and sales coverage.',
     {},
-    () => ({
-      messages: [
-        {
-          role: 'user',
-          content: {
-            type: 'text',
-            text: `Run an inventory reorder analysis:
-
-1. Call priority_get_low_stock_alerts to find products below reorder point.
-2. For the top 10 most critical items, call priority_get_product_sales_history to determine sales velocity.
-3. Check priority_get_incoming_shipments for any pending POs that cover these items.
-4. For each item, suggest a reorder quantity based on: current stock, reorder point, sales velocity, and lead time.
-5. Present a table: Product | Current Stock | Reorder Point | Monthly Velocity | Suggested Order Qty | Pending POs`,
-          },
-        },
-      ],
-    }),
+    () =>
+      message(`Review inventory:
+1. Use low-stock tools only when implemented. Otherwise page priority_list_products and inspect priority_get_stock_levels for a clearly stated scope.
+2. Use priority_product_sales_by_period for selected products and an explicit date range, retaining incomplete-window warnings.
+3. Read priority_get_incoming_shipments. Report missing reorder points or lead times as unknown.
+4. Suggest quantities only when stock, demand and lead-time evidence supports them; do not create purchase orders.`),
   );
 }

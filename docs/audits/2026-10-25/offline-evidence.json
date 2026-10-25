@@ -1,0 +1,871 @@
+{
+  "generatedAt": "2026-10-25T08:25:44.835Z",
+  "sourceCommit": "4fc5577",
+  "node": "v26.4.0",
+  "backend": "synthetic/offline; fetch disabled",
+  "counts": {
+    "tools": 102,
+    "resources": 2,
+    "templates": 1,
+    "prompts": 5,
+    "byStatus": {
+      "unavailable-in-code": 24,
+      "write-path": 21,
+      "read-path": 52,
+      "guide-only": 5
+    }
+  },
+  "findings": {
+    "legacyPatReturnedByResource": true,
+    "toolsWithAnnotations": 0,
+    "toolsWithOutputSchema": 0,
+    "largeResultLength": 24093,
+    "largeResultValidJson": false,
+    "maxRows600ActualRows": 1000,
+    "shortPageAssumedExhausted": {
+      "rows": 100,
+      "capped": false
+    },
+    "updateNoOp": {
+      "updated": true,
+      "form": "CUSTOMERS",
+      "key": "synthetic",
+      "result": {
+        "BOOLCLOSED": "",
+        "PHONE": "old"
+      }
+    },
+    "cancelNoOp": {
+      "cancelled": true,
+      "orderNumber": "synthetic",
+      "result": {
+        "BOOLCLOSED": "",
+        "PHONE": "old"
+      }
+    },
+    "unpaidScanCap": {
+      "customerId": "synthetic",
+      "unpaidInvoices": [],
+      "count": 0,
+      "note": "Scanned the 5000 oldest invoices and found at least 100 open; newer open invoices beyond that were not listed."
+    }
+  },
+  "inventory": [
+    {
+      "name": "priority_create_activity",
+      "module": "activities",
+      "status": "unavailable-in-code",
+      "source": "src/tools/activities.ts:72",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_customer_activities",
+      "module": "activities",
+      "status": "unavailable-in-code",
+      "source": "src/tools/activities.ts:42",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_open_tasks",
+      "module": "activities",
+      "status": "unavailable-in-code",
+      "source": "src/tools/activities.ts:54",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_activities",
+      "module": "activities",
+      "status": "unavailable-in-code",
+      "source": "src/tools/activities.ts:28",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_schedule_followup",
+      "module": "activities",
+      "status": "unavailable-in-code",
+      "source": "src/tools/activities.ts:92",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_create_customer",
+      "module": "customers",
+      "status": "write-path",
+      "source": "src/tools/customers.ts:342",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_customer",
+      "module": "customers",
+      "status": "read-path",
+      "source": "src/tools/customers.ts:144",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_customer_aging",
+      "module": "customers",
+      "status": "unavailable-in-code",
+      "source": "src/tools/customers.ts:322",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_customer_balance",
+      "module": "customers",
+      "status": "read-path",
+      "source": "src/tools/customers.ts:200",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_customer_contacts",
+      "module": "customers",
+      "status": "read-path",
+      "source": "src/tools/customers.ts:242",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_customer_documents",
+      "module": "customers",
+      "status": "read-path",
+      "source": "src/tools/customers.ts:281",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_customer_price_list",
+      "module": "customers",
+      "status": "read-path",
+      "source": "src/tools/customers.ts:263",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_customers",
+      "module": "customers",
+      "status": "read-path",
+      "source": "src/tools/customers.ts:43",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_search_customers",
+      "module": "customers",
+      "status": "read-path",
+      "source": "src/tools/customers.ts:174",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_update_customer",
+      "module": "customers",
+      "status": "write-path",
+      "source": "src/tools/customers.ts:384",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_aging_report",
+      "module": "debts",
+      "status": "unavailable-in-code",
+      "source": "src/tools/debts.ts:70",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_open_debts",
+      "module": "debts",
+      "status": "read-path",
+      "source": "src/tools/debts.ts:13",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_overdue_invoices",
+      "module": "debts",
+      "status": "unavailable-in-code",
+      "source": "src/tools/debts.ts:90",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_payment_history",
+      "module": "debts",
+      "status": "unavailable-in-code",
+      "source": "src/tools/debts.ts:113",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_top_debtors",
+      "module": "debts",
+      "status": "read-path",
+      "source": "src/tools/debts.ts:132",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_mark_invoice_disputed",
+      "module": "debts",
+      "status": "unavailable-in-code",
+      "source": "src/tools/debts.ts:187",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_record_payment_promise",
+      "module": "debts",
+      "status": "unavailable-in-code",
+      "source": "src/tools/debts.ts:163",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_attachment_url",
+      "module": "documents",
+      "status": "read-path",
+      "source": "src/tools/documents.ts:118",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_attachments",
+      "module": "documents",
+      "status": "read-path",
+      "source": "src/tools/documents.ts:51",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_upload_attachment",
+      "module": "documents",
+      "status": "write-path",
+      "source": "src/tools/documents.ts:190",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_ap_aging_summary",
+      "module": "finance",
+      "status": "unavailable-in-code",
+      "source": "src/tools/finance.ts:268",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_ar_aging_summary",
+      "module": "finance",
+      "status": "unavailable-in-code",
+      "source": "src/tools/finance.ts:252",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_bank_balances",
+      "module": "finance",
+      "status": "read-path",
+      "source": "src/tools/finance.ts:21",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_cash_position",
+      "module": "finance",
+      "status": "read-path",
+      "source": "src/tools/finance.ts:84",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_cashflow_projection",
+      "module": "finance",
+      "status": "unavailable-in-code",
+      "source": "src/tools/finance.ts:281",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_revenue_by_period",
+      "module": "finance",
+      "status": "read-path",
+      "source": "src/tools/finance.ts:127",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_top_customers",
+      "module": "finance",
+      "status": "read-path",
+      "source": "src/tools/finance.ts:181",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_top_products",
+      "module": "finance",
+      "status": "unavailable-in-code",
+      "source": "src/tools/finance.ts:231",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_add_line",
+      "module": "generic",
+      "status": "write-path",
+      "source": "src/tools/generic.ts:321",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_create_record",
+      "module": "generic",
+      "status": "write-path",
+      "source": "src/tools/generic.ts:247",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_describe_form",
+      "module": "generic",
+      "status": "read-path",
+      "source": "src/tools/generic.ts:113",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_entity_metadata",
+      "module": "generic",
+      "status": "read-path",
+      "source": "src/tools/generic.ts:79",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_record",
+      "module": "generic",
+      "status": "read-path",
+      "source": "src/tools/generic.ts:215",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_forms",
+      "module": "generic",
+      "status": "read-path",
+      "source": "src/tools/generic.ts:19",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_query",
+      "module": "generic",
+      "status": "read-path",
+      "source": "src/tools/generic.ts:149",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_update_record",
+      "module": "generic",
+      "status": "write-path",
+      "source": "src/tools/generic.ts:289",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_close",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:983",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_expected_costs",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:807",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_get",
+      "module": "impfiles",
+      "status": "read-path",
+      "source": "src/tools/impfiles.ts:418",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_landed_cost",
+      "module": "impfiles",
+      "status": "read-path",
+      "source": "src/tools/impfiles.ts:898",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_link_invoice",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:673",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_manual_alloc",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:773",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_open",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:451",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_preflight",
+      "module": "impfiles",
+      "status": "read-path",
+      "source": "src/tools/impfiles.ts:878",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_reopen",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:1026",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_run_calc_guide",
+      "module": "impfiles",
+      "status": "guide-only",
+      "source": "src/tools/impfiles.ts:951",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_search",
+      "module": "impfiles",
+      "status": "read-path",
+      "source": "src/tools/impfiles.ts:362",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "impfile_update",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:494",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "pinvoice_create",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:535",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "po_close_lines",
+      "module": "impfiles",
+      "status": "write-path",
+      "source": "src/tools/impfiles.ts:919",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "po_match",
+      "module": "impfiles",
+      "status": "read-path",
+      "source": "src/tools/impfiles.ts:840",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "bonded_fill_detail_guide",
+      "module": "impfiles-bonded",
+      "status": "guide-only",
+      "source": "src/tools/impfiles-bonded.ts:116",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "bonded_line_costs_guide",
+      "module": "impfiles-bonded",
+      "status": "guide-only",
+      "source": "src/tools/impfiles-bonded.ts:177",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "bonded_receipt_guide",
+      "module": "impfiles-bonded",
+      "status": "guide-only",
+      "source": "src/tools/impfiles-bonded.ts:85",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "bonded_release_guide",
+      "module": "impfiles-bonded",
+      "status": "guide-only",
+      "source": "src/tools/impfiles-bonded.ts:143",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "bonded_status",
+      "module": "impfiles-bonded",
+      "status": "read-path",
+      "source": "src/tools/impfiles-bonded.ts:48",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_create_credit_memo",
+      "module": "invoices",
+      "status": "write-path",
+      "source": "src/tools/invoices.ts:279",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_create_invoice",
+      "module": "invoices",
+      "status": "write-path",
+      "source": "src/tools/invoices.ts:201",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_invoice",
+      "module": "invoices",
+      "status": "read-path",
+      "source": "src/tools/invoices.ts:92",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_unpaid_invoices_for_customer",
+      "module": "invoices",
+      "status": "read-path",
+      "source": "src/tools/invoices.ts:127",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_invoices",
+      "module": "invoices",
+      "status": "read-path",
+      "source": "src/tools/invoices.ts:16",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_void_invoice",
+      "module": "invoices",
+      "status": "unavailable-in-code",
+      "source": "src/tools/invoices.ts:254",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_execute_odata_query",
+      "module": "meta",
+      "status": "read-path",
+      "source": "src/tools/meta.ts:212",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_current_user",
+      "module": "meta",
+      "status": "read-path",
+      "source": "src/tools/meta.ts:159",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_entity_schema",
+      "module": "meta",
+      "status": "read-path",
+      "source": "src/tools/meta.ts:90",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_companies",
+      "module": "meta",
+      "status": "read-path",
+      "source": "src/tools/meta.ts:121",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_entities",
+      "module": "meta",
+      "status": "read-path",
+      "source": "src/tools/meta.ts:36",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_cancel_order",
+      "module": "orders",
+      "status": "write-path",
+      "source": "src/tools/orders.ts:231",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_confirm_order",
+      "module": "orders",
+      "status": "unavailable-in-code",
+      "source": "src/tools/orders.ts:261",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_create_order",
+      "module": "orders",
+      "status": "write-path",
+      "source": "src/tools/orders.ts:155",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_backorder_report",
+      "module": "orders",
+      "status": "read-path",
+      "source": "src/tools/orders.ts:130",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_order",
+      "module": "orders",
+      "status": "read-path",
+      "source": "src/tools/orders.ts:54",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_order_shipment_status",
+      "module": "orders",
+      "status": "read-path",
+      "source": "src/tools/orders.ts:104",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_pending_orders",
+      "module": "orders",
+      "status": "read-path",
+      "source": "src/tools/orders.ts:75",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_orders",
+      "module": "orders",
+      "status": "read-path",
+      "source": "src/tools/orders.ts:15",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_update_order",
+      "module": "orders",
+      "status": "write-path",
+      "source": "src/tools/orders.ts:198",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_adjust_stock",
+      "module": "products",
+      "status": "unavailable-in-code",
+      "source": "src/tools/products.ts:325",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_low_stock_alerts",
+      "module": "products",
+      "status": "unavailable-in-code",
+      "source": "src/tools/products.ts:180",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_out_of_stock",
+      "module": "products",
+      "status": "unavailable-in-code",
+      "source": "src/tools/products.ts:199",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_product",
+      "module": "products",
+      "status": "read-path",
+      "source": "src/tools/products.ts:98",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_product_price",
+      "module": "products",
+      "status": "read-path",
+      "source": "src/tools/products.ts:218",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_product_sales_history",
+      "module": "products",
+      "status": "unavailable-in-code",
+      "source": "src/tools/products.ts:272",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_stock_levels",
+      "module": "products",
+      "status": "read-path",
+      "source": "src/tools/products.ts:144",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_products",
+      "module": "products",
+      "status": "read-path",
+      "source": "src/tools/products.ts:19",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_search_products",
+      "module": "products",
+      "status": "read-path",
+      "source": "src/tools/products.ts:119",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_transfer_stock",
+      "module": "products",
+      "status": "unavailable-in-code",
+      "source": "src/tools/products.ts:352",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_update_product_price",
+      "module": "products",
+      "status": "unavailable-in-code",
+      "source": "src/tools/products.ts:295",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_create_purchase_order",
+      "module": "purchase-orders",
+      "status": "write-path",
+      "source": "src/tools/purchase-orders.ts:98",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_incoming_shipments",
+      "module": "purchase-orders",
+      "status": "read-path",
+      "source": "src/tools/purchase-orders.ts:72",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_purchase_order",
+      "module": "purchase-orders",
+      "status": "read-path",
+      "source": "src/tools/purchase-orders.ts:53",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_purchase_orders",
+      "module": "purchase-orders",
+      "status": "read-path",
+      "source": "src/tools/purchase-orders.ts:19",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_product_sales_by_period",
+      "module": "sales-report",
+      "status": "read-path",
+      "source": "src/tools/sales-report.ts:85",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_supplier",
+      "module": "suppliers",
+      "status": "read-path",
+      "source": "src/tools/suppliers.ts:86",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_get_supplier_balance",
+      "module": "suppliers",
+      "status": "unavailable-in-code",
+      "source": "src/tools/suppliers.ts:105",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_suppliers",
+      "module": "suppliers",
+      "status": "read-path",
+      "source": "src/tools/suppliers.ts:13",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_search_suppliers",
+      "module": "suppliers",
+      "status": "read-path",
+      "source": "src/tools/suppliers.ts:53",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    },
+    {
+      "name": "priority_list_warehouses",
+      "module": "warehouses",
+      "status": "read-path",
+      "source": "src/tools/warehouses.ts:12",
+      "hasAnnotations": false,
+      "hasOutputSchema": false
+    }
+  ]
+}

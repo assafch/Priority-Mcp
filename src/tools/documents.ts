@@ -4,8 +4,9 @@ import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { attachmentSubformOf } from '../lib/forms.js';
-import { isCompositeKey } from '../lib/priority-schema.js';
+import { resolveRecordKey } from '../lib/record-key.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import { verifyLineCreate } from '../lib/write-verification.js';
 
 /**
  * Attachments live on a per-form sub-form (navigation property), NOT a global EXTFILES entity
@@ -60,7 +61,15 @@ matters — attachments are scoped to that specific document, not matched by key
         .string()
         .min(1)
         .describe('The entity/form type (e.g. "IMPFILES", "ORDERS", "LOGPART")'),
-      entityKey: z.string().min(1).describe('The entity key value (e.g. the IMPFNUM / ORDNAME)'),
+      entityKey: z
+        .string()
+        .min(1)
+        .optional()
+        .describe('The entity key value (e.g. the IMPFNUM / ORDNAME)'),
+      keys: z
+        .record(z.string(), z.union([z.string(), z.number().finite()]))
+        .optional()
+        .describe('Named parent key fields; exactly one of entityKey or keys'),
       subform: z
         .string()
         .optional()
@@ -69,19 +78,13 @@ matters — attachments are scoped to that specific document, not matched by key
     },
     async (params) => {
       try {
-        // A single-value key predicate 404s on composite-keyed forms (e.g. AINVOICES) — those
-        // can't be navigated by one key here.
-        if (isCompositeKey(params.entityType)) {
-          const { subform } = await resolveAttachmentSubform(
-            client,
-            params.entityType,
-            params.subform,
-          );
-          return unavailableHere(
-            `${params.entityType} has a composite key, so its attachments cannot be listed from a single key value here.`,
-            `Fetch the document with its dedicated get tool and $expand=${subform ?? 'EXTFILES_SUBFORM'} to see attachments inline.`,
-          );
-        }
+        const key = await resolveRecordKey(
+          client,
+          params.entityType,
+          params.entityKey,
+          params.keys,
+          'dryRun' in params && params.dryRun === true,
+        );
         const { subform, source, subforms } = await resolveAttachmentSubform(
           client,
           params.entityType,
@@ -97,13 +100,13 @@ matters — attachments are scoped to that specific document, not matched by key
         }
         const result = await client.listSubform<Record<string, unknown>>(
           params.entityType,
-          params.entityKey,
+          key,
           subform,
           `?$top=${params.top}`,
         );
         return textResult({
           entity: params.entityType,
-          entityKey: params.entityKey,
+          entityKey: key,
           subform,
           subformResolvedBy: source,
           attachments: result.value,
@@ -124,7 +127,11 @@ document store, not a link. This tool returns the attachment row (path, descript
 so you can locate the file; download it from the Priority UI.`,
     {
       entityType: z.string().min(1).describe('The parent form type (e.g. "IMPFILES", "ORDERS")'),
-      entityKey: z.string().min(1).describe('The parent record key'),
+      entityKey: z.string().min(1).optional().describe('The parent record key'),
+      keys: z
+        .record(z.string(), z.union([z.string(), z.number().finite()]))
+        .optional()
+        .describe('Named parent key fields; exactly one of entityKey or keys'),
       fileName: z
         .string()
         .min(1)
@@ -133,6 +140,13 @@ so you can locate the file; download it from the Priority UI.`,
     },
     async (params) => {
       try {
+        const key = await resolveRecordKey(
+          client,
+          params.entityType,
+          params.entityKey,
+          params.keys,
+          'dryRun' in params && params.dryRun === true,
+        );
         const { subform } = await resolveAttachmentSubform(
           client,
           params.entityType,
@@ -146,7 +160,7 @@ so you can locate the file; download it from the Priority UI.`,
         }
         const rows = await client.listSubform<Record<string, unknown>>(
           params.entityType,
-          params.entityKey,
+          key,
           subform,
           '?$top=100',
         );
@@ -164,7 +178,7 @@ so you can locate the file; download it from the Priority UI.`,
           return textResult({
             found: false,
             entity: params.entityType,
-            entityKey: params.entityKey,
+            entityKey: key,
             subform,
             attachmentsOnDocument: rows.value.length,
             available: rows.value.map((r) => r.EXTFILEDES ?? r.EXTFILENAME),
@@ -173,7 +187,7 @@ so you can locate the file; download it from the Priority UI.`,
         return textResult({
           found: true,
           entity: params.entityType,
-          entityKey: params.entityKey,
+          entityKey: key,
           subform,
           attachment: match,
           downloadUrl: null,
@@ -206,15 +220,17 @@ naming the sub-forms it does have. Verified live 2026-07-29: IMPFILES exposes EX
 After a real write the tool RE-READS the sub-form and returns the created row, so you can see
 exactly what Priority stored (including the EXTFILENUM it assigned).
 
-⚠️ Priority does NOT validate the path at insert time — a live round-trip on 2026-07-29 stored a
-non-existent path happily and left FILESIZE=0. A row whose FILESIZE is 0 is the signature of a
-path Priority could not resolve, so check it: an attachment pointing nowhere looks perfectly fine
-in the document list.
+⚠️ A stored row does not prove the path is accessible or the file bytes exist. Check the file in
+the Priority UI; FILESIZE alone is not conclusive evidence of path accessibility.
 
 ⚠️ WRITE. dryRun=true (default) previews the exact POST endpoint + body; nothing is sent.`,
     {
       entityType: z.string().min(1).describe('Parent form type (e.g. "IMPFILES", "PORDERS")'),
-      entityKey: z.string().min(1).describe('Parent record key (e.g. the IMPFNUM)'),
+      entityKey: z.string().min(1).optional().describe('Parent record key (e.g. the IMPFNUM)'),
+      keys: z
+        .record(z.string(), z.union([z.string(), z.number().finite()]))
+        .optional()
+        .describe('Named parent key fields; exactly one of entityKey or keys'),
       filePath: z
         .string()
         .optional()
@@ -243,6 +259,13 @@ in the document list.
     },
     async (params) => {
       try {
+        const key = await resolveRecordKey(
+          client,
+          params.entityType,
+          params.entityKey,
+          params.keys,
+          'dryRun' in params && params.dryRun === true,
+        );
         const path = params.filePath ?? params.fileUrl ?? params.fileName;
         if (params.fileContent) {
           return unavailableHere(
@@ -270,13 +293,6 @@ in the document list.
               : 'Confirm the form name with priority_list_forms and inspect it with priority_get_entity_metadata.',
           );
         }
-        if (isCompositeKey(params.entityType)) {
-          return unavailableHere(
-            `${params.entityType} has a COMPOSITE key on this install, so its sub-form cannot be addressed from a single key value.`,
-            'Attach to a single-keyed parent (e.g. IMPFILES / PORDERS / LOGPART), or use priority_add_line with a full composite key predicate.',
-          );
-        }
-
         // EXTFILEDES is mandatory and capped at 32 chars — derive a sane one from the path rather
         // than letting Priority reject the row for a missing/oversized display name.
         const baseName = path.split(/[\\/]/).pop() ?? path;
@@ -287,46 +303,27 @@ in the document list.
           [EXTFILES_FIELDS.description]: description,
           ...(suffix ? { [EXTFILES_FIELDS.suffix]: suffix } : {}),
         };
-        const endpoint = client.resolveSubformUrl(params.entityType, params.entityKey, subform);
+        const endpoint = client.resolveSubformUrl(params.entityType, key, subform);
 
         const gate = previewOrBlock(
           config,
           params.dryRun,
-          `ATTACH FILE TO ${params.entityType} ${params.entityKey}`,
+          `ATTACH FILE TO ${params.entityType} ${JSON.stringify(key)}`,
           { method: 'POST', endpoint, subform, subformResolvedBy: source, body },
         );
         if (gate) return gate;
 
-        const created = await client.addLine<Record<string, unknown>>(
-          params.entityType,
-          params.entityKey,
-          subform,
-          body,
-        );
-        // Verify rather than assume: re-read the sub-form and surface the stored row.
-        const after = await client.listSubform<Record<string, unknown>>(
-          params.entityType,
-          params.entityKey,
-          subform,
-          '?$top=100',
-        );
-        const stored = after.value.find(
-          (r) => String(r.EXTFILENAME ?? '') === path || String(r.EXTFILEDES ?? '') === description,
-        );
+        const outcome = await verifyLineCreate(client, params.entityType, key, subform, body);
         return textResult({
-          attached: Boolean(stored),
+          attached: outcome.verified,
           entity: params.entityType,
-          entityKey: params.entityKey,
+          entityKey: key,
           subform,
-          created,
-          storedRow: stored ?? null,
-          attachmentsOnDocument: after.value.length,
-          ...(stored
-            ? {}
-            : {
-                warning:
-                  'The POST returned without an error but the attachment is not visible in a re-read of the sub-form — check the document in the Priority UI before assuming it attached.',
-              }),
+          ...outcome,
+          created: outcome.result,
+          storedRow: outcome.verification.observed ?? null,
+          fileContentVerified: false,
+          note: 'Readback verifies the attachment row only; file bytes and server path accessibility need separate evidence.',
         });
       } catch (err) {
         throw toMcpError(err);

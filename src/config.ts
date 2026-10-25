@@ -33,6 +33,26 @@ function parseToolList(v?: string): string[] | undefined {
   return list.length ? list : undefined;
 }
 
+function connectionUrl(name: string) {
+  return z
+    .string()
+    .url(`${name} must be a valid URL`)
+    .refine((value) => {
+      try {
+        const url = new URL(value);
+        return (
+          ['http:', 'https:'].includes(url.protocol) &&
+          !url.username &&
+          !url.password &&
+          !url.search &&
+          !url.hash
+        );
+      } catch {
+        return false;
+      }
+    }, `${name} must use HTTP(S) without credentials, query strings or fragments`);
+}
+
 const configSchema = z
   .object({
     // --- Priority connection ---
@@ -40,11 +60,11 @@ const configSchema = z
     //   1. PRIORITY_SERVICE_ROOT (full root verbatim), else
     //   2. PRIORITY_BASE_URL + '/' + PRIORITY_COMPANY  (BASE_URL already includes the .ini), else
     //   3. PRIORITY_API_URL + '/' + PRIORITY_ENVIRONMENT + '/' + PRIORITY_COMPANY
-    priorityServiceRoot: z.string().url('PRIORITY_SERVICE_ROOT must be a valid URL').optional(),
+    priorityServiceRoot: connectionUrl('PRIORITY_SERVICE_ROOT').optional(),
     // Base up to and INCLUDING the system .ini segment, e.g.
     //   https://p.priority-connect.online/odata/Priority/tabp008h.ini
-    priorityBaseUrl: z.string().url('PRIORITY_BASE_URL must be a valid URL').optional(),
-    priorityApiUrl: z.string().url('PRIORITY_API_URL must be a valid URL').optional(),
+    priorityBaseUrl: connectionUrl('PRIORITY_BASE_URL').optional(),
+    priorityApiUrl: connectionUrl('PRIORITY_API_URL').optional(),
     // The system-database / .ini segment between `/odata/Priority/` and the company, used
     // only with PRIORITY_API_URL. Often `tabula.ini`, but installation-specific (e.g.
     // `tabp008h.ini`). Prefer folding it into PRIORITY_BASE_URL.
@@ -113,33 +133,33 @@ const configSchema = z
 
 export type Config = z.infer<typeof configSchema>;
 
-export function loadConfig(): Config {
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const result = configSchema.safeParse({
-    priorityServiceRoot: process.env.PRIORITY_SERVICE_ROOT,
-    priorityBaseUrl: process.env.PRIORITY_BASE_URL,
-    priorityApiUrl: process.env.PRIORITY_API_URL,
-    priorityEnvironment: process.env.PRIORITY_ENVIRONMENT,
-    priorityCompany: process.env.PRIORITY_COMPANY,
-    priorityPat: process.env.PRIORITY_PAT,
-    priorityUsername: process.env.PRIORITY_USERNAME,
-    priorityPassword: process.env.PRIORITY_PASSWORD,
-    priorityAppId: process.env.PRIORITY_APP_ID,
-    priorityAppKey: process.env.PRIORITY_APP_KEY,
-    priorityLanguage: process.env.PRIORITY_LANGUAGE,
-    priorityCustomPrefix: process.env.PRIORITY_CUSTOM_PREFIX,
-    priorityCustomEntities: process.env.PRIORITY_CUSTOM_ENTITIES,
-    priorityReadOnly: process.env.PRIORITY_READ_ONLY,
-    priorityAllowedTools: process.env.PRIORITY_ALLOWED_TOOLS,
-    priorityBlockedTools: process.env.PRIORITY_BLOCKED_TOOLS,
-    cacheTtlSeconds: process.env.CACHE_TTL_SECONDS,
-    rateLimitPerMinute: process.env.RATE_LIMIT_PER_MINUTE,
-    requestTimeoutMs: process.env.REQUEST_TIMEOUT_MS,
-    logLevel: process.env.LOG_LEVEL,
-    mcpTransport: process.env.MCP_TRANSPORT,
-    mcpHttpPort: process.env.MCP_HTTP_PORT,
-    mcpHttpHost: process.env.MCP_HTTP_HOST,
-    mcpHttpAuthToken: process.env.MCP_HTTP_AUTH_TOKEN,
-    mcpHttpAllowedOrigins: process.env.MCP_HTTP_ALLOWED_ORIGINS,
+    priorityServiceRoot: env.PRIORITY_SERVICE_ROOT,
+    priorityBaseUrl: env.PRIORITY_BASE_URL,
+    priorityApiUrl: env.PRIORITY_API_URL,
+    priorityEnvironment: env.PRIORITY_ENVIRONMENT,
+    priorityCompany: env.PRIORITY_COMPANY,
+    priorityPat: env.PRIORITY_PAT,
+    priorityUsername: env.PRIORITY_USERNAME,
+    priorityPassword: env.PRIORITY_PASSWORD,
+    priorityAppId: env.PRIORITY_APP_ID,
+    priorityAppKey: env.PRIORITY_APP_KEY,
+    priorityLanguage: env.PRIORITY_LANGUAGE,
+    priorityCustomPrefix: env.PRIORITY_CUSTOM_PREFIX,
+    priorityCustomEntities: env.PRIORITY_CUSTOM_ENTITIES,
+    priorityReadOnly: env.PRIORITY_READ_ONLY,
+    priorityAllowedTools: env.PRIORITY_ALLOWED_TOOLS,
+    priorityBlockedTools: env.PRIORITY_BLOCKED_TOOLS,
+    cacheTtlSeconds: env.CACHE_TTL_SECONDS,
+    rateLimitPerMinute: env.RATE_LIMIT_PER_MINUTE,
+    requestTimeoutMs: env.REQUEST_TIMEOUT_MS,
+    logLevel: env.LOG_LEVEL,
+    mcpTransport: env.MCP_TRANSPORT,
+    mcpHttpPort: env.MCP_HTTP_PORT,
+    mcpHttpHost: env.MCP_HTTP_HOST,
+    mcpHttpAuthToken: env.MCP_HTTP_AUTH_TOKEN,
+    mcpHttpAllowedOrigins: env.MCP_HTTP_ALLOWED_ORIGINS,
   });
 
   if (!result.success) {

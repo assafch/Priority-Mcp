@@ -49,7 +49,7 @@ describe('searchForm', () => {
     expect(res.meta.strategy).toBe('contains');
     expect(res.value).toHaveLength(1);
     expect(queries[0]).toContain("contains(CUSTDES,'Acme')");
-    expect(_stringFnSupport()).toBe(true);
+    expect(_stringFnSupport(client)).toBe(true);
   });
 
   it('falls back to client-side filtering on a 501, returning only matches', async () => {
@@ -74,7 +74,7 @@ describe('searchForm', () => {
     expect(res.value[0].CUSTNAME).toBe('11005');
     // The contains attempt happened once, then the fallback fetch.
     expect(queries.some((q) => q.includes('contains('))).toBe(true);
-    expect(_stringFnSupport()).toBe(false);
+    expect(_stringFnSupport(client)).toBe(false);
   });
 
   it('memoizes the unsupported verdict and skips contains on later calls', async () => {
@@ -84,14 +84,15 @@ describe('searchForm', () => {
       return { value: [] };
     });
     await searchForm(first.client, { form: 'CUSTOMERS', query: 'x', fields: ['CUSTDES'] });
-    expect(_stringFnSupport()).toBe(false);
+    expect(_stringFnSupport(first.client)).toBe(false);
 
-    // Now a client that would blow up if contains were attempted.
+    // Replace the same authenticated client backend stub; cached verdict remains local.
     const second = makeClient(async (_e, query) => {
       if (decodeURIComponent(query).includes('contains(')) throw new Error('must not attempt');
       return { value: [{ CUSTNAME: '2', CUSTDES: 'Beta' }] };
     });
-    const res = await searchForm(second.client, {
+    first.client.list = second.client.list;
+    const res = await searchForm(first.client, {
       form: 'CUSTOMERS',
       query: 'Beta',
       fields: ['CUSTDES'],
@@ -198,5 +199,23 @@ describe('searchForm', () => {
     });
     expect(queries[0]).toContain("STATDES eq 'פעיל'");
     expect(queries[0]).toContain('contains(CUSTDES');
+  });
+});
+
+describe('search capability tenancy', () => {
+  it('tries native search for a different backend after one backend rejects it', async () => {
+    const first = makeClient(async (_entity, query) => {
+      if (decodeURIComponent(query).includes('contains('))
+        throw new PriorityError('Function contains is not supported', 501);
+      return { value: [] };
+    });
+    await searchForm(first.client, { form: 'CUSTOMERS', query: 'x', fields: ['CUSTDES'] });
+    const second = makeClient(async () => ({ value: [{ CUSTDES: 'x' }] }));
+    const result = await searchForm(second.client, {
+      form: 'CUSTOMERS',
+      query: 'x',
+      fields: ['CUSTDES'],
+    });
+    expect(result.meta.strategy).toBe('contains');
   });
 });

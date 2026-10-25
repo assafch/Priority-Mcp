@@ -1,0 +1,65 @@
+{
+  "date": "2026-10-25",
+  "version": "0.2.0",
+  "baseline": "4fc5577",
+  "tools": {
+    "total": 105,
+    "readImplemented": 54,
+    "writeImplemented": 22,
+    "guides": 5,
+    "unavailable": 24
+  },
+  "tests": {
+    "files": 31,
+    "passed": 309,
+    "nodeVersions": [
+      "22.13.0",
+      "26.4.0"
+    ]
+  },
+  "lint": {
+    "files": 111,
+    "passed": true
+  },
+  "build": true,
+  "stdioSmoke": true,
+  "httpIntegration": "included in test suite; synthetic backend only",
+  "dependencyVulnerabilities": 0,
+  "package": {
+    "version": {
+      "name": "priority-mcp-server",
+      "version": "0.2.0"
+    },
+    "tools": 105,
+    "packageBin": true,
+    "backendChecked": false
+  },
+  "docker": {
+    "container": "priority-local-verify-20261025",
+    "health": {
+      "status": "ok",
+      "server": "priority-mcp-server"
+    },
+    "port": "32768",
+    "image": "sha256:36cf06dff87a3c8c64e2ef8d7c46949d374c8202dd1fb7659b1dfc3b85ba5f84"
+  },
+  "review": {
+    "importantOutstanding": 0,
+    "independentAffectedTests": 56
+  },
+  "livePriorityRequests": false,
+  "livePriorityWrites": false,
+  "deployment": false,
+  "integration": {
+    "status": "complete",
+    "checkout": "/Users/assaf/Documents/Priority MCP/priority-mcp-server",
+    "files": 73,
+    "backup": "/Users/assaf/Documents/Priority MCP/.backups/mcp-full-update-20261025",
+    "cleanInstall": true,
+    "build": true,
+    "passedTests": 309,
+    "lint": true,
+    "stdioSmoke": true,
+    "envUntouched": true
+  }
+}

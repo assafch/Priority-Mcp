@@ -15,7 +15,7 @@ export function registerDebtTools(server: McpServer, client: PriorityClient, con
     `Get open accounts-receivable (A/R) balances by customer — "who owes us money".
 
 Returns each customer with a positive open balance (OBLIGO.CREDIT), highest first.
-Filterable by minimum amount and sales rep. For the individual open invoices behind a
+Filterable by minimum amount and sales rep. For unreconciled invoice signals (not verified remaining balances) for a
 customer's balance, use priority_get_unpaid_invoices_for_customer.`,
     {
       minAmount: z.number().optional().describe('Minimum open balance'),
@@ -36,6 +36,7 @@ customer's balance, use priority_get_unpaid_invoices_for_customer.`,
         const qb = new ODataBuilder()
           .gt('CREDIT', 0)
           .orderBy('CREDIT', 'desc')
+          .orderBy('CUSTNAME', 'asc')
           .top(params.top)
           .skip(params.skip);
         if (params.minAmount !== undefined) qb.ge('CREDIT', params.minAmount);
@@ -81,7 +82,7 @@ Use this for a high-level view of collection exposure. For a single customer, us
       // AGED_BALANCES is not exposed as an OData entity on this install.
       return unavailableHere(
         'The AGED_BALANCES form is not exposed to the API on this installation.',
-        'Use priority_get_open_debts (OPENINVOICES) for the open-invoice list, or expose an aged-debts ' +
+        'Use priority_get_open_debts (OBLIGO.CREDIT customer balances) for customer A/R balances, or expose an aged-debts ' +
           'form (e.g. AGEDEBTS_WORKAREA / ACCOUNTS_RECEIVABLE) to the API for true aging buckets.',
       );
     },
@@ -99,12 +100,11 @@ Use for collection prioritization. Returns invoice number, customer, amount, due
       skip: z.number().int().min(0).default(0),
     },
     async (_params) => {
-      // The exposed open-A/R form (OPENINVOICES) has no due-date (PAYDATE) column, so
-      // overdue-by-due-date cannot be computed; OPENDEBT (which had PAYDATE) is not exposed.
+      // OBLIGO provides customer balances, not due-dated open items; OPENDEBT is not exposed.
       return unavailableHere(
         'Overdue-by-due-date needs a due-date (PAYDATE) column. OPENDEBT is not exposed here and ' +
-          'the exposed OPENINVOICES form has no PAYDATE.',
-        'Use priority_get_open_debts (OPENINVOICES, sorted by amount) for open invoices, or expose a ' +
+          'OBLIGO supplies customer balances, without verified due-dated open items. OPENINVOICES holds uninvoiced delivery documents.',
+        'Use priority_get_open_debts (OBLIGO.CREDIT, sorted by amount) for customer A/R balances, or expose a ' +
           'form carrying PAYDATE (e.g. OPENDEBT) to the API to rank by days overdue.',
       );
     },
@@ -140,7 +140,11 @@ Quick view for management — who owes the most. Sorted by total open balance de
     async (params) => {
       try {
         // CUSTOMERS has no balance field; OBLIGO carries the open A/R balance (CREDIT).
-        const qb = new ODataBuilder().gt('CREDIT', 0).orderBy('CREDIT', 'desc').top(params.top);
+        const qb = new ODataBuilder()
+          .gt('CREDIT', 0)
+          .orderBy('CREDIT', 'desc')
+          .orderBy('CUSTNAME', 'asc')
+          .top(params.top);
         if (OBLIGO?.defaultSelect) qb.select(...OBLIGO.defaultSelect);
         const result = await client.list<Record<string, unknown>>('OBLIGO', qb.build());
         const topDebtors = result.value.map((o) => ({

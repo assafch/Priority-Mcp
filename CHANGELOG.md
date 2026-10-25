@@ -5,7 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-25
+
+Local software update; live tenant execution and deployment remain separately verified.
+
+- Add capability discovery, optional backend health check, safe subform-row updates, and structured results/annotations for every tool.
+- Fix legacy PAT resource exposure, unverified update success, invalid oversized JSON, misleading capped-invoice counts, composite-key gaps, and cross-client discovery/search cache reuse.
+- Improve complete report paging, date boundaries, bounded adaptive reads, and accurate missing-source guidance.
+- Share the HTTP backend per tenant/configuration; bound sessions and test real protocol/auth/lifecycle behavior.
+- Upgrade SDK/Zod/Vitest and transitive dependencies; declare Node 22.13+ and CI on 22/24.
+- Replace unsafe operational helper behavior with guarded previews and explicit procedure guidance. Keep 24 unsupported handlers and 5 procedure guides truthful.
+
+## [Unreleased — historical July work]
 
 ### Fixed — defects reported from a multi-day live import-file reconciliation (`PRIORITY_MCP_ISSUES.md`)
 

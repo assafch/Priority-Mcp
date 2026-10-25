@@ -9,6 +9,7 @@ import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
 import { searchForm } from '../lib/search.js';
 import type { PriorityCustomer } from '../lib/types.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import { verifyRecordCreate, verifyRecordUpdate } from '../lib/write-verification.js';
 
 const CUSTOMERS = getSchema('CUSTOMERS');
 const CUST_SEARCH_FIELDS = CUSTOMERS?.searchFields ?? ['CUSTDES', 'CUSTNAME'];
@@ -373,8 +374,8 @@ Disabled when PRIORITY_READ_ONLY=true.`,
         const gate = previewOrBlock(config, params.dryRun, 'CREATE CUSTOMER', body);
         if (gate) return gate;
 
-        const result = await client.create('CUSTOMERS', body);
-        return textResult({ created: true, customer: result });
+        const outcome = await verifyRecordCreate(client, 'CUSTOMERS', body);
+        return textResult({ created: outcome.verified, customer: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -421,8 +422,13 @@ Disabled when PRIORITY_READ_ONLY=true.`,
         );
         if (gate) return gate;
 
-        const result = await client.update('CUSTOMERS', params.customerId, body);
-        return textResult({ updated: true, customerId: params.customerId, customer: result });
+        const outcome = await verifyRecordUpdate(client, 'CUSTOMERS', params.customerId, body);
+        return textResult({
+          updated: outcome.verified,
+          customerId: params.customerId,
+          customer: outcome.result,
+          ...outcome,
+        });
       } catch (err) {
         throw toMcpError(err);
       }

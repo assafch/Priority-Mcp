@@ -35,3 +35,35 @@ describe('parseReadOnly (PRIORITY_READ_ONLY fail-safe parsing)', () => {
     expect(err).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('connection URL credentials', () => {
+  afterEach(() => vi.restoreAllMocks());
+  it('rejects URL userinfo, query strings and fragments before resources or previews can expose them', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('configuration rejected');
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const field of ['PRIORITY_SERVICE_ROOT', 'PRIORITY_BASE_URL', 'PRIORITY_API_URL']) {
+      for (const url of [
+        'https://u:secret@example.test/odata',
+        'https://example.test/odata?token=secret',
+        'https://example.test/odata#secret',
+      ]) {
+        expect(() =>
+          loadConfig({ [field]: url, PRIORITY_COMPANY: 'demo', PRIORITY_PAT: 'synthetic' }),
+        ).toThrow('configuration rejected');
+      }
+    }
+    expect(exit).toHaveBeenCalledTimes(9);
+  });
+  it('uses a caller-supplied config environment with fail-safe defaults', async () => {
+    const { loadConfig } = await import('../src/config.js');
+    const parsed = loadConfig({
+      PRIORITY_SERVICE_ROOT: 'https://example.test/odata/Priority/test.ini/demo',
+      PRIORITY_PAT: 'synthetic',
+    });
+    expect(parsed.priorityReadOnly).toBe(true);
+    expect(parsed.mcpHttpHost).toBe('127.0.0.1');
+  });
+});

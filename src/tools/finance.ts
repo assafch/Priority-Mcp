@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
-import { dateFrom, dateTo } from '../lib/dates.js';
+import { dateRangeFilter } from '../lib/dates.js';
 import { fetchAllPages } from '../lib/paginate.js';
 import {
   FINAL_INVOICE_STATUS,
@@ -92,14 +92,23 @@ currency — accounts in different currencies are NOT summed into one number.`,
     },
     async (params) => {
       try {
-        const qb = new ODataBuilder()
-          .filter("CASHNAME ne ''")
-          .select('ACCNAME', 'ACCDES', 'CODE', 'BALANCE1', 'BALANCE3', 'INACTIVE', 'CLOSED')
-          .top(200);
-        const result = await client.list<Record<string, unknown>>('ACCOUNTS', qb.build());
+        const scan = await fetchAllPages<Record<string, unknown>>(
+          (skip, top) =>
+            client.list(
+              'ACCOUNTS',
+              new ODataBuilder()
+                .filter("CASHNAME ne ''")
+                .select('ACCNAME', 'ACCDES', 'CODE', 'BALANCE1', 'BALANCE3', 'INACTIVE', 'CLOSED')
+                .orderBy('ACCNAME', 'asc')
+                .top(top)
+                .skip(skip)
+                .build(),
+            ),
+          { maxRows: 10000, fetchNext: (link) => client.listNext(link) },
+        );
         const rows = params.includeInactive
-          ? result.value
-          : result.value.filter((a) => a.INACTIVE !== 'Y' && a.CLOSED !== 'Y');
+          ? scan.rows
+          : scan.rows.filter((a) => a.INACTIVE !== 'Y' && a.CLOSED !== 'Y');
         const byCurrency: Record<string, number> = {};
         for (const a of rows) {
           const code = String(a.CODE ?? '?');
@@ -114,6 +123,7 @@ currency — accounts in different currencies are NOT summed into one number.`,
             balanceAccountCurrency: a.BALANCE3,
             balanceLocal: a.BALANCE1,
           })),
+          scan: { ...scan, rows: undefined, accountsScanned: scan.rows.length },
           totalByCurrency: byCurrency,
           totalLocalCurrency: rows.reduce((s, a) => s + (Number(a.BALANCE1) || 0), 0),
           note: "Totals are GL balances with Priority's own sign convention (credit balances negative). totalLocalCurrency sums BALANCE1 across every account; totalByCurrency sums BALANCE3 within each currency.",
@@ -140,21 +150,22 @@ totalNetRevenue is pre-VAT (the P&L figure); totalWithVat is the VAT-inclusive p
         // AINVOICES dates live in IVDATE on this install (there is no CURDATE on the form).
         // Restrict to final invoices server-side so drafts ('טיוטא') and cancelled ('מבוטלת')
         // never count as revenue, and page through every match so the sum is complete.
+        const rangeFilter = dateRangeFilter('IVDATE', params.dateFrom, params.dateTo);
         const scan = await fetchAllPages<Record<string, unknown>>(
           (skip, top) => {
             const qb = new ODataBuilder()
-              .ge('IVDATE', dateFrom(params.dateFrom))
-              .le('IVDATE', dateTo(params.dateTo))
+              .filter(rangeFilter)
               .eq('STATDES', FINAL_INVOICE_STATUS)
-              .select('IVNUM', 'IVDATE', 'CUSTNAME', 'VAT', 'TOTPRICE')
+              .select('IVNUM', 'DEBIT', 'IVTYPE', 'IVDATE', 'CUSTNAME', 'VAT', 'TOTPRICE')
               .orderBy('IVDATE', 'asc')
+              .orderBy('IVNUM', 'asc')
+              .orderBy('DEBIT', 'asc')
+              .orderBy('IVTYPE', 'asc')
               .top(top)
               .skip(skip);
-            return client
-              .list<Record<string, unknown>>('AINVOICES', qb.build())
-              .then((r) => r.value);
+            return client.list<Record<string, unknown>>('AINVOICES', qb.build());
           },
-          { maxRows: MAX_INVOICE_SCAN },
+          { maxRows: MAX_INVOICE_SCAN, fetchNext: (link) => client.listNext(link) },
         );
         const totals = sumInvoiceRevenue(scan.rows);
         return textResult({
@@ -164,10 +175,12 @@ totalNetRevenue is pre-VAT (the P&L figure); totalWithVat is the VAT-inclusive p
           totalWithVat: totals.grossWithVat,
           invoiceCount: totals.count,
           byMonth: groupRevenueByMonth(scan.rows),
-          scan: { invoicesScanned: scan.rows.length, pages: scan.pages, complete: !scan.capped },
-          ...(scan.capped
+          dateSemantics:
+            'Date-only ranges use UTC day boundaries; monthly buckets preserve Priority IVDATE calendar dates. Explicit offsets retain their instant meaning.',
+          scan: { ...scan, rows: undefined, invoicesScanned: scan.rows.length },
+          ...(!scan.complete
             ? {
-                warning: `Only the first ${MAX_INVOICE_SCAN} final invoices in this range were summed — totals are INCOMPLETE. Narrow the date range.`,
+                warning: `Only ${scan.rows.length} scanned final invoices in this range were summed (${scan.stopReason}) — totals are INCOMPLETE. Narrow the date range.`,
               }
             : {}),
           note: 'Final tax invoices only (STATDES=סופית); drafts/cancelled excluded. totalNetRevenue = Σ(TOTPRICE − VAT); totalWithVat = Σ TOTPRICE.',
@@ -194,30 +207,31 @@ matching invoices in the range — not just the first page — so the ranking is
         // Page through every final invoice in the range, then aggregate by customer. The old
         // code took an unordered first-1000-row slice, so any busy year ranked on an arbitrary
         // subset. Final-only (STATDES) keeps drafts/cancelled out of the revenue.
+        const rangeFilter = dateRangeFilter('IVDATE', params.dateFrom, params.dateTo);
         const scan = await fetchAllPages<Record<string, unknown>>(
           (skip, top) => {
             const qb = new ODataBuilder()
-              .ge('IVDATE', dateFrom(params.dateFrom))
-              .le('IVDATE', dateTo(params.dateTo))
+              .filter(rangeFilter)
               .eq('STATDES', FINAL_INVOICE_STATUS)
-              .select('CUSTNAME', 'VAT', 'TOTPRICE', 'IVDATE')
+              .select('IVNUM', 'DEBIT', 'IVTYPE', 'CUSTNAME', 'VAT', 'TOTPRICE', 'IVDATE')
               .orderBy('IVDATE', 'asc')
+              .orderBy('IVNUM', 'asc')
+              .orderBy('DEBIT', 'asc')
+              .orderBy('IVTYPE', 'asc')
               .top(top)
               .skip(skip);
-            return client
-              .list<Record<string, unknown>>('AINVOICES', qb.build())
-              .then((r) => r.value);
+            return client.list<Record<string, unknown>>('AINVOICES', qb.build());
           },
-          { maxRows: MAX_INVOICE_SCAN },
+          { maxRows: MAX_INVOICE_SCAN, fetchNext: (link) => client.listNext(link) },
         );
 
         return textResult({
           topCustomers: rankCustomersByRevenue(scan.rows, params.top),
           period: { from: params.dateFrom, to: params.dateTo },
-          scan: { invoicesScanned: scan.rows.length, pages: scan.pages, complete: !scan.capped },
-          ...(scan.capped
+          scan: { ...scan, rows: undefined, invoicesScanned: scan.rows.length },
+          ...(!scan.complete
             ? {
-                warning: `Ranking is based on only the first ${MAX_INVOICE_SCAN} final invoices in range and may be INCOMPLETE. Narrow the date range.`,
+                warning: `Ranking is based on only ${scan.rows.length} scanned final invoices in range (${scan.stopReason}) and may be INCOMPLETE. Narrow the date range.`,
               }
             : {}),
           note: 'Ranked by netRevenue (Σ TOTPRICE − VAT) over final invoices only; grossWithVat is VAT-inclusive.',
@@ -259,7 +273,7 @@ Returns totals for aging buckets (current, 30, 60, 90, 90+ days).`,
       // AGED_BALANCES is not exposed as an OData entity on this install.
       return unavailableHere(
         'The AGED_BALANCES form is not exposed to the API on this installation.',
-        'Use priority_get_open_debts (OPENINVOICES) for open A/R, or expose AGEDEBTS_WORKAREA / ' +
+        'Use priority_get_open_debts (OBLIGO.CREDIT customer balances) for open A/R, or expose AGEDEBTS_WORKAREA / ' +
           'ACCOUNTS_RECEIVABLE to the API for aged buckets.',
       );
     },
@@ -294,12 +308,11 @@ Shows expected cash inflows and outflows to help with liquidity planning.`,
     },
     async (_params) => {
       // Both due-dated open-item forms this needs (OPENDEBT for A/R, SUP_OPENDEBT for A/P) are
-      // not exposed here, and the exposed OPENINVOICES has no PAYDATE — so an inflow/outflow
-      // projection keyed on due date can't be built.
+      // not exposed here. OBLIGO supplies customer balances rather than due-dated open items.
       return unavailableHere(
         'Cashflow projection needs due-dated open A/R and A/P items (OPENDEBT / SUP_OPENDEBT), which ' +
-          'are not exposed to the API on this installation, and OPENINVOICES has no PAYDATE.',
-        'Use priority_get_open_debts (OPENINVOICES) for the open-A/R total, and expose OPENDEBT / ' +
+          'are not exposed to the API on this installation; OBLIGO supplies customer balances without due-dated open items. OPENINVOICES holds uninvoiced delivery documents.',
+        'Use priority_get_open_debts (OBLIGO.CREDIT customer balances) for the open-A/R total, and expose OPENDEBT / ' +
           'SUP_OPENDEBT (with PAYDATE) to the API to project cashflow by due date.',
       );
     },

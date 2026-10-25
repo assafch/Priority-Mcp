@@ -90,7 +90,9 @@ const purchaseOrder = z
   .superRefine((value, ctx) => {
     if (value.supplier === 'new') {
       const checked = z.object(supplierFields).safeParse(value);
-      if (!checked.success) for (const issue of checked.error.issues) ctx.addIssue(issue);
+      if (!checked.success)
+        for (const issue of checked.error.issues)
+          ctx.addIssue({ code: 'custom', path: issue.path, message: issue.message });
     } else if (
       [value.supplierName, value.registrationNumber, value.contactName, value.email].some(Boolean)
     ) {

@@ -4,7 +4,7 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { dateFrom, dateTo } from '../lib/dates.js';
+import { dateRange } from '../lib/dates.js';
 import { probeForm } from '../lib/forms.js';
 import {
   type ImpfileSnapshot,
@@ -20,6 +20,12 @@ import {
 import { getSchema } from '../lib/priority-schema.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import {
+  verifyLineCreate,
+  verifyRecordCreate,
+  verifyRecordUpdate,
+  verifyWrite,
+} from '../lib/write-verification.js';
 
 const IMPFILES = getSchema('IMPFILES');
 
@@ -137,47 +143,6 @@ async function loadSnapshot(client: PriorityClient, impfnum: string): Promise<Im
   return normalizeSnapshot(record) as unknown as ImpfileSnapshot;
 }
 
-const CLOSED_STATUS = 'סופי';
-const DRAFT_STATUS = 'טיוטא';
-
-/**
- * Close/reopen may be a SCREEN PROCEDURE on this install, in which case the PATCH can return 200
- * while changing nothing. So don't report success from the write's return value — re-read the file
- * and report the state it is ACTUALLY in. The cached snapshot is invalidated first, otherwise the
- * verification read could be served from the pre-write cache and confirm a change that never landed.
- */
-async function verifyFileState(
-  client: PriorityClient,
-  impfnum: string,
-  intent: 'close' | 'reopen',
-  result: unknown,
-): Promise<Row> {
-  client.invalidateCache('IMPFILES');
-  const after = await client.get<Row>(
-    'IMPFILES',
-    impfnum,
-    new ODataBuilder().select('IMPFNUM', 'CLOSED', 'STATDES').build(),
-  );
-  const closed = String(after?.CLOSED ?? '') === 'Y';
-  const status = after?.STATDES ?? null;
-  const wanted = intent === 'close';
-  const took = wanted ? closed && status === CLOSED_STATUS : !closed && status !== CLOSED_STATUS;
-  return {
-    [intent === 'close' ? 'closed' : 'reopened']: took,
-    impfnum,
-    verifiedAfterWrite: { CLOSED: after?.CLOSED ?? null, STATDES: status },
-    expected: wanted
-      ? { CLOSED: 'Y', STATDES: CLOSED_STATUS }
-      : { CLOSED: '(empty)', STATDES: DRAFT_STATUS },
-    ...(took
-      ? {}
-      : {
-          warning: `The PATCH succeeded but the re-read shows CLOSED=${JSON.stringify(after?.CLOSED ?? null)}, STATDES=${JSON.stringify(status)} — the ${intent} did NOT take. On this install ${intent} is likely a screen procedure: run "${intent === 'close' ? 'סגירת תיק' : 'ביטול סגירת תיק'}" in the import-file screen, then re-check with impfile_get.`,
-        }),
-    result,
-  };
-}
-
 /** Params shared by the three impfile_link_invoice routes. */
 interface LinkParams {
   invoiceNumber: string;
@@ -261,38 +226,28 @@ async function linkInvoiceLine(client: PriorityClient, config: Config, p: LinkPa
     currentlyLinkedTo: currentLink,
   });
   if (gate) return gate;
-  const result = await client.updateSubformRow(
-    'IMPFILEIV',
-    keys,
-    'IMPFILEIVS_SUBFORM',
-    subKeys,
+  const outcome = await verifyWrite(
+    () => client.updateSubformRow('IMPFILEIV', keys, 'IMPFILEIVS_SUBFORM', subKeys, body),
+    () =>
+      client.getSubformRow(
+        'IMPFILEIV',
+        keys,
+        'IMPFILEIVS_SUBFORM',
+        subKeys,
+        '?$select=KLINE,PARTNAME,IMPFNUM',
+        { cache: false },
+      ),
     body,
   );
   client.invalidateCache('IMPFILES');
-  client.invalidateCache('IMPFILEIV');
-  // Verify rather than assume: re-read the row and report what actually stuck.
-  const after = await client.getSubformRow<Row>(
-    'IMPFILEIV',
-    keys,
-    'IMPFILEIVS_SUBFORM',
-    subKeys,
-    '?$select=KLINE,PARTNAME,IMPFNUM',
-  );
-  const linked = String(after?.IMPFNUM ?? '') === p.impfnum;
   return textResult({
-    linked,
+    linked: outcome.verified,
     route: 'line',
     invoice: p.invoiceNumber,
     line: p.line,
     impfnum: p.impfnum,
-    verifiedAfterWrite: { IMPFNUM: after?.IMPFNUM ?? null },
-    ...(linked
-      ? {}
-      : {
-          warning:
-            'The PATCH returned without an error but the re-read does not show the new IMPFNUM — Priority may route this change through the screen procedure. Check the line in "חשבוניות לתיקי יבוא ← פירוט".',
-        }),
-    result,
+    verifiedAfterWrite: outcome.verification.observed ?? null,
+    ...outcome,
   });
 }
 
@@ -330,7 +285,7 @@ async function linkInvoiceFinal(client: PriorityClient, config: Config, p: LinkP
       error: `No PIVDETAILS row for IVNUM='${p.invoiceNumber}', DEBIT='${p.debit}', TYPE='${p.ivtype}'.`,
     });
   }
-  if (inv.STORNOFLAG) {
+  if (inv.STORNOFLAG === 'Y') {
     return textResult({
       error: `Invoice ${p.invoiceNumber} is cancelled (storno) — refusing to link it to a file.`,
     });
@@ -351,9 +306,14 @@ async function linkInvoiceFinal(client: PriorityClient, config: Config, p: LinkP
     invoiceStatus: inv.STATDES ?? null,
   });
   if (gate) return gate;
-  const result = await client.updateComposite('PIVDETAILS', keys, body);
+  const outcome = await verifyRecordUpdate(client, 'PIVDETAILS', keys, body);
   client.invalidateCache('IMPFILES');
-  return textResult({ linked: true, route: 'final', invoice: p.invoiceNumber, result });
+  return textResult({
+    linked: outcome.verified,
+    route: 'final',
+    invoice: p.invoiceNumber,
+    ...outcome,
+  });
 }
 
 export function registerImpfileTools(server: McpServer, client: PriorityClient, config: Config) {
@@ -400,8 +360,12 @@ projected to key columns. Use impfile_get for a single file's full detail.`,
         }
         if (params.poNumber) qb.eq('ORDNAME', sanitizeODataValue(params.poNumber));
         if (params.declaration) qb.eq('CUSTOMSNUM', sanitizeODataValue(params.declaration));
-        if (params.dateFrom) qb.ge('CURDATE', dateFrom(params.dateFrom));
-        if (params.dateTo) qb.le('CURDATE', dateTo(params.dateTo));
+        const range = dateRange(params.dateFrom, params.dateTo);
+        if (range.from) qb.ge('CURDATE', range.from);
+        if (range.to) {
+          if (range.upperOperator === 'lt') qb.lt('CURDATE', range.to);
+          else qb.le('CURDATE', range.to);
+        }
         if (IMPFILES?.defaultSelect) qb.select(...IMPFILES.defaultSelect);
 
         const result = await client.list<Row>('IMPFILES', qb.build());
@@ -483,8 +447,8 @@ WARHSNAME defaults to your bonded warehouse ('arov') when omitted here — pass 
         );
         const gate = previewOrBlock(config, p.dryRun, 'OPEN IMPORT FILE', body);
         if (gate) return gate;
-        const result = await client.create('IMPFILES', body);
-        return textResult({ opened: true, importFile: result });
+        const outcome = await verifyRecordCreate(client, 'IMPFILES', body);
+        return textResult({ opened: outcome.verified, importFile: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -524,8 +488,8 @@ Only the fields you pass are changed. NOTE: country-of-origin is PER-LINE in the
         }
         const gate = previewOrBlock(config, p.dryRun, `UPDATE IMPORT FILE ${p.impfnum}`, body);
         if (gate) return gate;
-        const result = await client.update('IMPFILES', p.impfnum, body);
-        return textResult({ updated: true, importFile: result });
+        const outcome = await verifyRecordUpdate(client, 'IMPFILES', p.impfnum, body);
+        return textResult({ updated: outcome.verified, importFile: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -661,9 +625,9 @@ Links to the file via header IMPFNUM + OTYPE='P'; DEBIT='D'.
           body,
         );
         if (gate) return gate;
-        const result = await client.create('PINVOICES', body);
+        const outcome = await verifyRecordCreate(client, 'PINVOICES', body);
         client.invalidateCache('IMPFILES'); // the new invoice shows up in the file's snapshot
-        return textResult({ created: true, invoice: result });
+        return textResult({ created: outcome.verified, invoice: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -736,7 +700,7 @@ invoice already linked to a different file unless allowRelink=true.
           });
         }
         // Guard the same composite-key/storno corruption that void_invoice was disabled for.
-        if (inv.STORNOFLAG) {
+        if (inv.STORNOFLAG === 'Y') {
           return textResult({
             error: `Invoice ${p.invoiceNumber} is cancelled (storno) — refusing to link it to a file.`,
           });
@@ -761,9 +725,9 @@ invoice already linked to a different file unless allowRelink=true.
           relink: Boolean(currentLink && currentLink !== p.impfnum),
         });
         if (gate) return gate;
-        const result = await client.updateComposite('PINVOICES', keys, body);
+        const outcome = await verifyRecordUpdate(client, 'PINVOICES', keys, body);
         client.invalidateCache('IMPFILES'); // the relink shows up in the file's snapshot
-        return textResult({ linked: true, invoice: result });
+        return textResult({ linked: outcome.verified, invoice: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -784,7 +748,7 @@ allocation (or the form's $metadata) before a real write.
     {
       impfnum: z.string().min(1),
       target: z.enum(['cost', 'item']),
-      fields: z.record(z.unknown()).describe('Raw line fields (unverified — see note)'),
+      fields: z.record(z.string(), z.unknown()).describe('Raw line fields (unverified — see note)'),
       dryRun: z.boolean().default(true),
     },
     async (p) => {
@@ -796,8 +760,8 @@ allocation (or the form's $metadata) before a real write.
           body: p.fields,
         });
         if (gate) return gate;
-        const result = await client.addLine('IMPFILES', p.impfnum, subform, p.fields);
-        return textResult({ added: true, subform, result });
+        const outcome = await verifyLineCreate(client, 'IMPFILES', p.impfnum, subform, p.fields);
+        return textResult({ added: outcome.verified, subform, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -815,7 +779,7 @@ before a real write.
     {
       impfnum: z.string().min(1),
       fields: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .describe('Raw expected-cost line fields (unverified — see note)'),
       dryRun: z.boolean().default(true),
     },
@@ -827,8 +791,14 @@ before a real write.
           body: p.fields,
         });
         if (gate) return gate;
-        const result = await client.addLine('IMPFILES', p.impfnum, 'EXPIVDUTIES_SUBFORM', p.fields);
-        return textResult({ added: true, result });
+        const outcome = await verifyLineCreate(
+          client,
+          'IMPFILES',
+          p.impfnum,
+          'EXPIVDUTIES_SUBFORM',
+          p.fields,
+        );
+        return textResult({ added: outcome.verified, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -939,9 +909,9 @@ line key and is best done in the screen.
           note: 'Procedure-gated: if Priority rejects the field write, run "close order" in the PO screen, then verify with po_match.',
         });
         if (gate) return gate;
-        const result = await client.update('PORDERS', p.poNumber, body);
+        const outcome = await verifyRecordUpdate(client, 'PORDERS', p.poNumber, body);
         client.invalidateCache('IMPFILES');
-        return textResult({ closed: true, po: p.poNumber, result });
+        return textResult({ closed: outcome.verified, po: p.poNumber, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -1015,8 +985,14 @@ PATCH's success.
           note: 'Procedure-gated: if Priority rejects the field write, run "סגירת תיק" in the import-file screen, then verify CLOSED=Y via impfile_get.',
         });
         if (gate) return gate;
-        const result = await client.update('IMPFILES', p.impfnum, body);
-        return textResult(await verifyFileState(client, p.impfnum, 'close', result));
+        const outcome = await verifyRecordUpdate(client, 'IMPFILES', p.impfnum, body);
+        return textResult({
+          closed: outcome.verified,
+          impfnum: p.impfnum,
+          verifiedAfterWrite: outcome.verification.observed ?? null,
+          expected: outcome.verification.expected,
+          ...outcome,
+        });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -1045,8 +1021,14 @@ the guided sequence: fix → run calc → close → re-run תמחיר if it alre
           note: 'Procedure-gated: if Priority rejects the field write, run "ביטול סגירת תיק" in the screen. Then: fix → recalc → reclose → re-run תמחיר if needed.',
         });
         if (gate) return gate;
-        const result = await client.update('IMPFILES', p.impfnum, body);
-        return textResult(await verifyFileState(client, p.impfnum, 'reopen', result));
+        const outcome = await verifyRecordUpdate(client, 'IMPFILES', p.impfnum, body);
+        return textResult({
+          reopened: outcome.verified,
+          impfnum: p.impfnum,
+          verifiedAfterWrite: outcome.verification.observed ?? null,
+          expected: outcome.verification.expected,
+          ...outcome,
+        });
       } catch (err) {
         throw toMcpError(err);
       }

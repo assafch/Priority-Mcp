@@ -4,11 +4,13 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { dateFrom, dateTo } from '../lib/dates.js';
+import { dateRangeFilter } from '../lib/dates.js';
+import { fetchAllPages } from '../lib/paginate.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
 import { searchForm } from '../lib/search.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import { verifyRecordCreate } from '../lib/write-verification.js';
 
 const AINVOICES = getSchema('AINVOICES');
 
@@ -38,6 +40,7 @@ Pass either customerId (the exact CUSTNAME) or customerName (a name to resolve a
     },
     async (params) => {
       try {
+        const rangeFilter = dateRangeFilter('IVDATE', params.dateFrom, params.dateTo);
         let customerId = params.customerId;
         let resolvedCustomer: Record<string, unknown> | undefined;
 
@@ -73,8 +76,9 @@ Pass either customerId (the exact CUSTNAME) or customerName (a name to resolve a
           .skip(params.skip)
           .orderBy(params.orderBy, params.orderDir);
         if (customerId) qb.eq('CUSTNAME', sanitizeODataValue(customerId));
-        if (params.dateFrom) qb.ge('IVDATE', dateFrom(params.dateFrom));
-        if (params.dateTo) qb.le('IVDATE', dateTo(params.dateTo));
+        qb.filter(rangeFilter);
+        for (const key of ['IVNUM', 'DEBIT', 'IVTYPE'])
+          if (key !== params.orderBy) qb.orderBy(key, params.orderDir);
         if (params.status) qb.eq('STATDES', sanitizeODataValue(params.status));
         if (AINVOICES?.defaultSelect) qb.select(...AINVOICES.defaultSelect);
         const result = await client.list('AINVOICES', qb.build());
@@ -117,7 +121,21 @@ If you don't know the IVNUM, use priority_list_invoices to find it first.`,
           });
         }
         // A single IVNUM normally maps to one document; surface all rows if more than one.
-        return textResult(rows.length === 1 ? rows[0] : { matches: rows, count: rows.length });
+        const continuations = rows.flatMap((row) =>
+          Object.entries(row)
+            .filter(([key, value]) => key.endsWith('@odata.nextLink') && typeof value === 'string')
+            .map(([field, nextLink]) => ({ invoiceNumber: row.IVNUM, field, nextLink })),
+        );
+        const completeness = {
+          complete: continuations.length === 0 && !result['@odata.nextLink'],
+          ...(continuations.length ? { stopReason: 'expandedContinuation', continuations } : {}),
+          ...(result['@odata.nextLink'] ? { nextLink: result['@odata.nextLink'] } : {}),
+        };
+        return textResult(
+          rows.length === 1
+            ? { ...rows[0], completeness }
+            : { matches: rows, count: rows.length, completeness },
+        );
       } catch (err) {
         throw toMcpError(err);
       }
@@ -128,7 +146,7 @@ If you don't know the IVNUM, use priority_list_invoices to find it first.`,
     'priority_get_unpaid_invoices_for_customer',
     `Get all unpaid/open invoices for a specific customer.
 
-Shortcut for collection workflows — returns only invoices with outstanding balance for the given customer.`,
+Returns unreconciled posted invoice signals; this does not prove remaining balance or a due date. Scan completeness and found/returned counts are explicit.`,
     {
       customerId: z.string().min(1).describe('The CUSTNAME'),
       top: z.number().int().min(1).max(500).default(100),
@@ -146,49 +164,54 @@ Shortcut for collection workflows — returns only invoices with outstanding bal
         // is selectable but NOT filterable — Priority 500s ("Object reference not set") on
         // `IVRECONDATE eq null` — so we page the customer's invoices and filter client-side.
         const select = [...(AINVOICES?.defaultSelect ?? []), 'IVRECONDATE'];
-        const PAGE = 200;
-        const MAX_SCAN = 5000; // safety cap so a huge history can't run away
-        const open: Record<string, unknown>[] = [];
-        let skip = 0;
-        let capped = false;
-        // Page OLDEST-first: collection workflows want the most-overdue invoices, so the first
-        // `top` open invoices we collect must be the oldest ones — NOT the newest (the old code
-        // paged desc and kept the newest `top`, silently dropping the oldest, most-overdue debt).
-        for (;;) {
-          const qb = new ODataBuilder()
-            .eq('CUSTNAME', sanitizeODataValue(params.customerId))
-            .select(...select)
-            .orderBy('IVDATE', 'asc')
-            .top(PAGE)
-            .skip(skip);
-          const { value } = await client.list<Record<string, unknown>>('AINVOICES', qb.build());
-          for (const row of value) {
-            // Empty recon date = unreconciled = open. Skip un-posted drafts, which carry a
-            // temporary document number (Priority prefixes those with "T") and aren't real debt.
-            if (row.IVRECONDATE == null && !String(row.IVNUM ?? '').startsWith('T')) {
-              open.push(row);
-            }
-          }
-          if (open.length >= params.top) break; // oldest `top` collected
-          if (value.length < PAGE) break; // exhausted the customer's invoices
-          skip += PAGE;
-          if (skip >= MAX_SCAN) {
-            capped = true;
-            break;
-          }
-        }
-        // Already ascending, but sort defensively so the output is strictly oldest-first.
-        open.sort((a, b) => String(a.IVDATE ?? '').localeCompare(String(b.IVDATE ?? '')));
+        const scan = await fetchAllPages<Record<string, unknown>>(
+          (skip, top) =>
+            client.list(
+              'AINVOICES',
+              new ODataBuilder()
+                .eq('CUSTNAME', sanitizeODataValue(params.customerId))
+                .select(...new Set([...select, 'IVNUM', 'DEBIT', 'IVTYPE']))
+                .orderBy('IVDATE', 'asc')
+                .orderBy('IVNUM', 'asc')
+                .orderBy('DEBIT', 'asc')
+                .orderBy('IVTYPE', 'asc')
+                .top(top)
+                .skip(skip)
+                .build(),
+            ),
+          { pageSize: 200, maxRows: 5000, fetchNext: (link) => client.listNext(link) },
+        );
+        const open = scan.rows.filter(
+          (row) =>
+            Object.hasOwn(row, 'IVRECONDATE') &&
+            row.IVRECONDATE == null &&
+            row.STATDES === 'סופית' &&
+            !String(row.IVNUM ?? '').startsWith('T'),
+        );
+        const unclassified = scan.rows.filter(
+          (row) =>
+            !Object.hasOwn(row, 'IVRECONDATE') ||
+            (row.IVRECONDATE == null &&
+              row.STATDES == null &&
+              !String(row.IVNUM ?? '').startsWith('T')),
+        ).length;
+        const complete = scan.complete && unclassified === 0;
         const result = open.slice(0, params.top);
         return textResult({
           customerId: params.customerId,
           unpaidInvoices: result,
           count: result.length,
-          ...(capped
-            ? {
-                note: `Scanned the ${MAX_SCAN} oldest invoices and found at least ${params.top} open; newer open invoices beyond that were not listed.`,
-              }
-            : {}),
+          scan: {
+            ...scan,
+            rows: undefined,
+            complete,
+            ...(unclassified ? { stopReason: 'missingSourceFields', unclassified } : {}),
+            scanned: scan.rows.length,
+            found: open.length,
+            returned: result.length,
+          },
+          remainingBalance: null,
+          note: `Scanned ${scan.rows.length} invoices and found ${open.length} unreconciled posted invoice signals; returned ${result.length}. ${complete ? 'History exhausted.' : `Scan incomplete (${unclassified ? 'missingSourceFields' : scan.stopReason}); additional matches may exist.`} Original invoice totals are not verified remaining debt; use OBLIGO for customer A/R balances and reconciled open-item evidence for invoice debt.`,
         });
       } catch (err) {
         throw toMcpError(err);
@@ -243,8 +266,8 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
         const gate = previewOrBlock(config, params.dryRun, 'CREATE INVOICE', body);
         if (gate) return gate;
 
-        const result = await client.create('AINVOICES', body);
-        return textResult({ created: true, invoice: result });
+        const outcome = await verifyRecordCreate(client, 'AINVOICES', body);
+        return textResult({ created: outcome.verified, invoice: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -326,8 +349,8 @@ PRIORITY_READ_ONLY=true.`,
       );
       if (gate) return gate;
       try {
-        const result = await client.create('AINVOICES', body);
-        return textResult({ created: true, creditMemo: result });
+        const outcome = await verifyRecordCreate(client, 'AINVOICES', body);
+        return textResult({ created: outcome.verified, creditMemo: outcome.result, ...outcome });
       } catch (err) {
         throw toMcpError(err);
       }

@@ -2,6 +2,7 @@ import { type McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/serv
 import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
+import { connectionInfo } from '../lib/connection-info.js';
 import { parseCsdl } from '../lib/csdl.js';
 
 export function registerAllResources(server: McpServer, client: PriorityClient, config: Config) {
@@ -57,17 +58,7 @@ export function registerAllResources(server: McpServer, client: PriorityClient, 
         {
           uri: uri.href,
           mimeType: 'application/json',
-          text: JSON.stringify(
-            {
-              environment: config.priorityEnvironment,
-              company: config.priorityCompany,
-              language: config.priorityLanguage,
-              apiUrl: config.priorityApiUrl,
-              readOnly: config.priorityReadOnly,
-            },
-            null,
-            2,
-          ),
+          text: JSON.stringify(connectionInfo(config), null, 2),
         },
       ],
     }),
@@ -86,17 +77,7 @@ export function registerAllResources(server: McpServer, client: PriorityClient, 
         {
           uri: uri.href,
           mimeType: 'application/json',
-          text: JSON.stringify(
-            {
-              username: config.priorityUsername,
-              environment: config.priorityEnvironment,
-              company: config.priorityCompany,
-              language: config.priorityLanguage,
-              readOnly: config.priorityReadOnly,
-            },
-            null,
-            2,
-          ),
+          text: JSON.stringify(connectionInfo(config), null, 2),
         },
       ],
     }),
