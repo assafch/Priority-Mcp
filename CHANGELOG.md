@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add `priority_close_invoice`: finalize an invoice draft with Priority's own CLOSEANINVOICE activation through the Web SDK (full identity required, OData preflight, dry-run default, no retries, OData verification, attempt ledger).
+- Refuse any OData write that carries the procedure-only field FINAL (body at any depth, any spelling, or as the URL target) in the client and in every raw-field tool; a direct FINAL write locks a draft with no journal (T164, T173 — ticket SCI26096671).
 - Add shared account request scheduling, subscriber-isolated GET coalescing, byte-bounded caches and request-context metrics.
 - Correct short-page search coverage, share targeted schema/capability evidence, and provide a compact optional operations profile with detailed help fallback.
 - Add exact/ambiguous entity resolution, safe typed read-query previews and three policy-checked read workflows.

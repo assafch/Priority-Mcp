@@ -8,3 +8,5 @@ output/playwright/
 
 # Generated offline measurements and local profiler artifacts.
 artifacts/
+output/close-invoice-attempts.jsonl
+output/locks/
