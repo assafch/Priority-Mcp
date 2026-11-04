@@ -16,6 +16,7 @@ import {
   preflight,
 } from '../lib/impfiles-logic.js';
 import { getSchema } from '../lib/priority-schema.js';
+import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
 import {
@@ -666,9 +667,12 @@ allocation (or the form's $metadata) before a real write.
     async (p) => {
       try {
         const subform = p.target === 'cost' ? 'MANIVDUTIES_SUBFORM' : 'MANIVPARTS2_SUBFORM';
+        const endpoint = client.resolveSubformUrl('IMPFILES', p.impfnum, subform);
+        const blocked = blockProcedureOnlyField('POST', endpoint, p.fields);
+        if (blocked) return blocked;
         const gate = previewOrBlock(config, p.dryRun, `ADD MANUAL ALLOCATION → ${subform}`, {
           method: 'POST',
-          endpoint: client.resolveSubformUrl('IMPFILES', p.impfnum, subform),
+          endpoint,
           body: p.fields,
         });
         if (gate) return gate;
@@ -697,9 +701,12 @@ before a real write.
     },
     async (p) => {
       try {
+        const endpoint = client.resolveSubformUrl('IMPFILES', p.impfnum, 'EXPIVDUTIES_SUBFORM');
+        const blocked = blockProcedureOnlyField('POST', endpoint, p.fields);
+        if (blocked) return blocked;
         const gate = previewOrBlock(config, p.dryRun, 'ADD EXPECTED COST → EXPIVDUTIES_SUBFORM', {
           method: 'POST',
-          endpoint: client.resolveSubformUrl('IMPFILES', p.impfnum, 'EXPIVDUTIES_SUBFORM'),
+          endpoint,
           body: p.fields,
         });
         if (gate) return gate;

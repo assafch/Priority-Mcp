@@ -83,6 +83,14 @@ const rows: Array<
   ['bonded_release_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
   ['bonded_status', 'impfiles-bonded', 'read', 'implemented', ['WAREHOUSES']],
   ['priority_create_credit_memo', 'invoices', 'write', 'implemented', ['AINVOICES']],
+  // Web SDK procedure, not an OData write: its own domain keeps the per-form evidence probes of 'invoices' unchanged.
+  [
+    'priority_close_invoice',
+    'procedures',
+    'write',
+    'implemented',
+    ['EINVOICES', 'AINVOICES', 'PINVOICES'],
+  ],
   ['priority_create_invoice', 'invoices', 'write', 'implemented', ['AINVOICES']],
   ['priority_get_invoice', 'invoices', 'read', 'implemented', ['AINVOICES']],
   ['priority_get_unpaid_invoices_for_customer', 'invoices', 'read', 'implemented', ['AINVOICES']],

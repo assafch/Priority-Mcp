@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { setTimeout as abortableDelay } from 'node:timers/promises';
 import type { Config } from '../config.js';
 import { getSchema } from '../lib/priority-schema.js';
+import { assertNoProcedureOnlyField, wireBody } from '../lib/procedure-only-fields.js';
 import { type NamedKeys, type RecordKey, validateNamedKeys } from '../lib/record-key.js';
 import type { Logger } from '../logger.js';
 import { MetricsCollector, metricFormLabel } from '../runtime/metrics.js';
@@ -326,11 +327,18 @@ export class PriorityClient {
     signal?: AbortSignal,
     budget: ReadOptions = {},
   ): Promise<T> {
+    // FINAL (and any other procedure-only field) never leaves this process, in a write body or as
+    // the URL target — see procedure-only-fields.ts. The body is resolved to its wire form once so
+    // the object inspected is the object serialized (toJSON/getters/proxies cannot diverge), and
+    // the check sits here so every write path (request/create/update/updateComposite/addLine/
+    // updateSubformRow) is covered, not only the generic tools.
+    const wire = wireBody(body);
+    assertNoProcedureOnlyField(method, wire, url);
     if (method === 'GET' || this.readOnly)
-      return this.sendRequest<T>(url, method, body, useCache, signal, budget);
+      return this.sendRequest<T>(url, method, wire, useCache, signal, budget);
     this.readFence.beginWrite();
     try {
-      return await this.sendRequest<T>(url, method, body, false, signal, budget);
+      return await this.sendRequest<T>(url, method, wire, false, signal, budget);
     } finally {
       // An ambiguous write may have committed; all cached derived forms must be refreshed too.
       this.readFence.endWrite();

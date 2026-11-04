@@ -4,6 +4,7 @@ import type { Config } from '../config.js';
 import { toolRegistry } from '../lib/tool-registry.js';
 import { registerActivityTools } from './activities.js';
 import { registerCapabilityTools } from './capabilities.js';
+import { registerCloseInvoiceTool } from './close-invoice.js';
 import { registerCustomerTools } from './customers.js';
 import { registerDebtTools } from './debts.js';
 import { registerDocumentTools } from './documents.js';
@@ -38,6 +39,8 @@ export function registerAllTools(server: McpServer, client: PriorityClient, conf
   registerCustomerTools(gated, client, config);
   registerDebtTools(gated, client, config);
   registerInvoiceTools(gated, client, config);
+  // The sanctioned finalize: CLOSEANINVOICE through the Web SDK (never a FINAL write).
+  registerCloseInvoiceTool(gated, client, config);
   registerOrderTools(gated, client, config);
   registerProductTools(gated, client, config);
   registerSalesReportTools(gated, client, config);

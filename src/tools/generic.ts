@@ -5,6 +5,7 @@ import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { filterForms, listExposedForms } from '../lib/forms.js';
+import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { resolveRecordKey } from '../lib/record-key.js';
 import { knowledgeFor } from '../lib/schema-service.js';
 import { checkWriteAllowed, dryRunRequest, textResult } from '../lib/write-guard.js';
@@ -286,6 +287,8 @@ Set confirm=true to actually create (also blocked entirely when PRIORITY_READ_ON
     },
     async (params) => {
       const endpoint = client.resolveEntityUrl(params.form);
+      const blocked = blockProcedureOnlyField('POST', endpoint, params.data);
+      if (blocked) return blocked;
       if (!params.confirm) return dryRunRequest('POST', endpoint, params.data);
       const guard = checkWriteAllowed(config);
       if (guard.blocked) return guard.result;
@@ -324,6 +327,8 @@ Set confirm=true to actually update (also blocked when PRIORITY_READ_ONLY=true).
       const key = await resolveRecordKey(client, params.form, params.key, params.keys, true);
       if (!Object.keys(params.data).length) throw toMcpError(new Error('No fields to update.'));
       const endpoint = client.resolveEntityUrl(params.form, key);
+      const blocked = blockProcedureOnlyField('PATCH', endpoint, params.data);
+      if (blocked) return blocked;
       if (!params.confirm) return dryRunRequest('PATCH', endpoint, params.data);
       const guard = checkWriteAllowed(config);
       if (guard.blocked) return guard.result;
@@ -370,6 +375,8 @@ Set confirm=true to actually add the line (also blocked when PRIORITY_READ_ONLY=
     async (params) => {
       const key = await resolveRecordKey(client, params.form, params.key, params.keys, true);
       const endpoint = client.resolveSubformUrl(params.form, key, params.subform);
+      const blocked = blockProcedureOnlyField('POST', endpoint, params.data);
+      if (blocked) return blocked;
       if (!params.confirm) return dryRunRequest('POST', endpoint, params.data);
       const guard = checkWriteAllowed(config);
       if (guard.blocked) return guard.result;
@@ -416,6 +423,8 @@ Set confirm=true to actually add the line (also blocked when PRIORITY_READ_ONLY=
           params.subform,
           params.lineKeys,
         );
+        const blocked = blockProcedureOnlyField('PATCH', endpoint, params.data);
+        if (blocked) return blocked;
         if (!params.confirm) return dryRunRequest('PATCH', endpoint, params.data);
         const guard = checkWriteAllowed(config);
         if (guard.blocked) return guard.result;
