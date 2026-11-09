@@ -175,6 +175,38 @@ describe('print format and input helpers', () => {
     ]);
   });
 
+  it('sends a read-only mandatory sort field back with its default (live WWWSHOWORDER shape)', () => {
+    const filled = buildInputFields(
+      [
+        {
+          field: 1,
+          title: 'הזמנה',
+          code: 'Str',
+          operator: 0,
+          value: '',
+          readonly: 0,
+          mandatory: 0,
+        },
+        {
+          field: 2,
+          title: 'מיון',
+          code: 'Rstr',
+          operator: 0,
+          value: 'לפי מספר הזמנה',
+          readonly: 1,
+          mandatory: 1,
+          zoom: 'Choose',
+        },
+        { field: 3, title: 'הערה', code: 'Str', value: '', readonly: 1, mandatory: 0 },
+      ],
+      'SO26000419',
+    );
+    expect(filled.EditFields).toEqual([
+      { field: 1, op: 0, value: 'SO26000419' },
+      { field: 2, op: 0, value: 'לפי מספר הזמנה' },
+    ]);
+  });
+
   it('refuses a choice that would email or print every document', () => {
     expect(
       chooseOption([
@@ -475,6 +507,31 @@ describe('printDocument procedure', () => {
     );
     expect(htmlToPdf).toHaveBeenCalledWith(html, 'https://files.example/netfiles/order.pdf');
     expect(outcome).toMatchObject({ status: 'ok', pdfSource: 'html-converted' });
+  });
+
+  it("fails instead of converting Priority's netfiles sign-in page into a blank PDF", async () => {
+    // Shape captured from a live run (9 Nov 2026): 200 text/html, no document data at all.
+    const signIn = Buffer.from(
+      '<!DOCTYPE HTML PUBLIC "Priority 12 - Enterprise Management System"><HTML><BODY><form>' +
+        '<input type="hidden" name="_procedure" value="GetNetFile@Y">' +
+        '<input type="hidden" name="_netfilesauth" value="priimages/tabp008h.ini">' +
+        '</form></BODY></HTML>',
+    );
+    const htmlToPdf = vi.fn(async () => PDF);
+    const { outcome } = await run(
+      'ORDERS',
+      'SO26000419',
+      [{ ORDNAME: 'SO26000419' }],
+      orderSteps(),
+      {
+        deps: {
+          fetchFile: async () => ({ bytes: signIn, contentType: 'text/html' }),
+          htmlToPdf,
+        },
+      },
+    );
+    expect(htmlToPdf).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ status: 'failed', reason: 'download-unauthenticated' });
   });
 
   it('says how to install Chrome when HTML comes back and conversion is unavailable', async () => {

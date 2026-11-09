@@ -95,6 +95,7 @@ export interface ProcedureEditField {
   operator?: number;
   value?: string;
   readonly?: boolean | number;
+  mandatory?: boolean | number;
   zoom?: string;
 }
 
@@ -286,7 +287,16 @@ export function buildInputFields(
     if (!targets.length && pool[0]) targets = [pool[0]];
   }
   const targetIds = new Set(targets.map((field) => field.field));
-  const sent = fields.filter((field) => targetIds.has(field.field) || !field.readonly);
+  // A read-only field can still be a mandatory choice list (WWWSHOWORDER's מיון: readonly=1,
+  // mandatory=1, zoom=Choose). Dropping it makes Priority reject the step, so send every
+  // mandatory or pre-filled field back with its default value.
+  const sent = fields.filter(
+    (field) =>
+      targetIds.has(field.field) ||
+      !field.readonly ||
+      Boolean(field.mandatory) ||
+      String(field.value ?? '') !== '',
+  );
   return {
     EditFields: sent.map((field) => {
       if (!targetIds.has(field.field)) {
@@ -402,6 +412,16 @@ export function chooseFormat(
       .map((format) => `${format.id} ${format.title}`.trim())
       .join('; ')}.`,
   };
+}
+
+/**
+ * Priority's netfiles URLs need the web session cookie (PriUserV2). Without it the server answers
+ * 200 text/html with its GetNetFile sign-in form, which would otherwise be converted into a
+ * blank PDF and reported as success.
+ */
+export function isNetFileSignInPage(bytes: Buffer): boolean {
+  const head = bytes.subarray(0, 64 * 1024).toString('utf8');
+  return /GetNetFile|_netfilesauth|name="_procedure"/i.test(head);
 }
 
 export function sniffPrintFile(
@@ -874,6 +894,12 @@ export async function printDocument(
     let pdf = fetched.bytes;
     let pdfSource: 'priority' | 'html-converted' = 'priority';
     const kind = sniffPrintFile(fetched.bytes, fetched.contentType);
+    if (kind === 'html' && isNetFileSignInPage(fetched.bytes)) {
+      throw new PrintFailure(
+        'download-unauthenticated',
+        `Priority generated the file but served its sign-in page instead of the document (${safeHost(fileUrl)} needs the web session cookie PriUserV2). No PDF was produced.`,
+      );
+    }
     if (kind === 'html') {
       const convert =
         deps.htmlToPdf ?? ((html: Buffer, pageUrl: string) => convertHtmlToPdf({ html, pageUrl }));
