@@ -16,6 +16,7 @@ import { registerImpfileTools } from './impfiles.js';
 import { registerInvoiceTools } from './invoices.js';
 import { registerMetaTools } from './meta.js';
 import { registerOrderTools } from './orders.js';
+import { registerPrintDocumentTool } from './print-document.js';
 import { registerProductTools } from './products.js';
 import { registerPurchaseOrderTools } from './purchase-orders.js';
 import { registerQueryPlanningTools } from './query-planning.js';
@@ -41,6 +42,8 @@ export function registerAllTools(server: McpServer, client: PriorityClient, conf
   registerInvoiceTools(gated, client, config);
   // The sanctioned finalize: CLOSEANINVOICE through the Web SDK (never a FINAL write).
   registerCloseInvoiceTool(gated, client, config);
+  // Official print layout via the same Web SDK (display mode; does not finalize).
+  registerPrintDocumentTool(gated, client, config);
   registerOrderTools(gated, client, config);
   registerProductTools(gated, client, config);
   registerSalesReportTools(gated, client, config);

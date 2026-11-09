@@ -2,7 +2,7 @@
 
 This catalog describes code, not current tenant permissions. Use `priority_get_capabilities` for policy and dated form-readability evidence; follow `nextSkip`. A successful form probe does not enable an unavailable handler or prove a write.
 
-110 registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
+112 registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
 
 | Tool | Domain | Mode | Implementation |
 | --- | --- | --- | --- |
@@ -92,6 +92,8 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `priority_get_pending_orders` | orders | read | implemented |
 | `priority_list_orders` | orders | read | implemented |
 | `priority_update_order` | orders | write | implemented |
+| `priority_close_invoice` | procedures | write | implemented |
+| `priority_print_document` | procedures | read | implemented |
 | `priority_adjust_stock` | products | write | unavailable |
 | `priority_get_low_stock_alerts` | products | read | unavailable |
 | `priority_get_out_of_stock` | products | read | unavailable |

@@ -211,3 +211,22 @@ Set `PRIORITY_LANGUAGE=HE` for Hebrew responses. This affects:
 - Field descriptions in metadata
 
 The default is `EN` (English).
+
+## Official print (`priority_print_document`)
+
+OData has no print action. The official layout is a Priority **document procedure**, run through the Web SDK (`priority-web-sdk`), the same session `priority_close_invoice` uses:
+
+| Form | Procedure |
+|------|-----------|
+| `ORDERS` | `WWWSHOWORDER` |
+| `AINVOICES` (tax invoices and credit invoices, including `T…` drafts) | `WWWSHOWAIV` |
+| `EINVOICES` (`OV…`) | `WWWSHOWEIV` |
+| `CINVOICES` | `WWWSHOWCIV` |
+| `TINVOICES` (receipts) | `WWWSHOWTIV` |
+| `DOCUMENTS_D`, `OPENINVOICES` (delivery notes) | `WWWSHOWDOC` |
+
+These are Priority's standard document program names. If `procStart` says a program does not exist, the form's Actions list in the UI has the name this tenant actually uses.
+
+The tool always answers the format step with `mode: 'display'` and `pdf: 1`. Display mode is what the on-screen document uses. It does not set the Printed flag and does not stamp מקור; invoices and delivery notes come out as העתק. It never calls `CLOSEANINVOICE` and never writes `FINAL`, so printing a draft does not finalize it. A warning, an error, or a choice that would email, sign, close, or print every document is cancelled.
+
+If Priority returns HTML anyway, headless Chrome converts that HTML. Priority's own PDF is requested first and is the preferred file.
