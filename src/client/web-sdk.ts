@@ -78,6 +78,16 @@ export interface WebSdkModule {
     profile: { company: string },
     autoRetrieve: number,
   ): Promise<WebSdkForm>;
+  /**
+   * Start a procedure by its internal name (type 'P'). Optional so callers that only open forms
+   * (the close-invoice fake included) still satisfy this interface. `loadWebSdk` requires it.
+   */
+  procStart?(
+    name: string,
+    type: string,
+    progress: ((...args: unknown[]) => void) | null,
+    company?: string,
+  ): Promise<WebSdkProcStep>;
 }
 
 /** Lazy CommonJS load; throws a clear message when the dependency is missing. */
@@ -94,8 +104,12 @@ export function loadWebSdk(): WebSdkModule {
     );
   }
   const sdk = (mod.default ?? mod) as WebSdkModule;
-  if (typeof sdk.login !== 'function' || typeof sdk.formStart !== 'function') {
-    throw new Error('priority-web-sdk loaded but login/formStart are missing');
+  if (
+    typeof sdk.login !== 'function' ||
+    typeof sdk.formStart !== 'function' ||
+    typeof sdk.procStart !== 'function'
+  ) {
+    throw new Error('priority-web-sdk loaded but login/formStart/procStart are missing');
   }
   return sdk;
 }
