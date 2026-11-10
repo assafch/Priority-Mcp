@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add `priority_print_document`: the official Priority print layout (WWWSHOWORDER, WWWSHOWAIV, WWWSHOWEIV, WWWSHOWCIV, WWWSHOWTIV, WWWSHOWDOC) as a PDF via the Web SDK. Display mode only — it does not finalize drafts, set the Printed flag, or email the customer. Returns base64 for a remote MCP client.
 - Add `priority_close_invoice`: finalize an invoice draft with Priority's own CLOSEANINVOICE activation through the Web SDK (full identity required, OData preflight, dry-run default, no retries, OData verification, attempt ledger).
 - Refuse any OData write that carries the procedure-only field FINAL (body at any depth, any spelling, or as the URL target) in the client and in every raw-field tool; a direct FINAL write locks a draft with no journal (T164, T173 — ticket SCI26096671).
 - Add shared account request scheduling, subscriber-isolated GET coalescing, byte-bounded caches and request-context metrics.

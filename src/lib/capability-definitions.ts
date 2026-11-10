@@ -91,6 +91,12 @@ const rows: Array<
     'implemented',
     ['EINVOICES', 'AINVOICES', 'PINVOICES'],
   ],
+  // Same Web SDK as close, but display-mode only. ORDERS and AINVOICES are the probed forms;
+  // EINVOICES and the other print forms are accepted without making the tool look unavailable
+  // when one of them is not exposed.
+  ['priority_print_document', 'procedures', 'read', 'implemented', ['ORDERS', 'AINVOICES']],
+  // Web SDK form read of ACCOUNTS_RECEIVABLE (not OData-enabled here); CUSTOMERS is the probed form.
+  ['priority_customer_ledger', 'procedures', 'read', 'implemented', ['CUSTOMERS']],
   ['priority_create_invoice', 'invoices', 'write', 'implemented', ['AINVOICES']],
   ['priority_get_invoice', 'invoices', 'read', 'implemented', ['AINVOICES']],
   ['priority_get_unpaid_invoices_for_customer', 'invoices', 'read', 'implemented', ['AINVOICES']],
