@@ -2,7 +2,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
-import { WebSdkSession, deriveWebSdkLoginConfig, loadWebSdk } from '../client/web-sdk.js';
+import {
+  WebSdkSession,
+  deriveWebSdkLoginConfig,
+  loadWebSdk,
+  webSdkCookie,
+} from '../client/web-sdk.js';
 import type { Config } from '../config.js';
 import { convertHtmlToPdf } from '../lib/html-to-pdf.js';
 import {
@@ -94,6 +99,21 @@ export function registerPrintDocumentTool(
       session ??= new WebSdkSession(loadWebSdk(), deriveWebSdkLoginConfig(config));
       return session;
     });
+  // PriUserV2 goes only to the Priority web host the SDK logged in to, over https.
+  const fileCookie =
+    deps.fileCookie ??
+    ((url: string) => {
+      const value = webSdkCookie('PriUserV2');
+      if (!value) return undefined;
+      try {
+        const target = new URL(url);
+        const sdkHost = new URL(deriveWebSdkLoginConfig(config).url).host;
+        if (target.protocol !== 'https:' || target.host !== sdkHost) return undefined;
+      } catch {
+        return undefined;
+      }
+      return `PriUserV2=${value}`;
+    });
 
   server.tool(
     'priority_print_document',
@@ -141,6 +161,7 @@ export function registerPrintDocumentTool(
           {
             ...deps,
             session: sessionFactory,
+            fileCookie,
             outputDir: deps.outputDir ?? (process.env.PRIORITY_PRINT_DIR || undefined),
             maxBytes: deps.maxBytes ?? envNumber('PRIORITY_PRINT_MAX_BYTES'),
             htmlToPdf:
