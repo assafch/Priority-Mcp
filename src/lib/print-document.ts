@@ -164,6 +164,11 @@ export interface PrintRequest {
 export interface PrintDeps {
   session?: () => WebSdkSession;
   fetchFile?: (url: string) => Promise<{ bytes: Buffer; contentType: string }>;
+  /**
+   * Cookie header for the netfiles download (PriUserV2 from the Web SDK login), or undefined when
+   * the URL is not on the Priority host. Used only by the default fetch.
+   */
+  fileCookie?: (url: string) => string | undefined;
   htmlToPdf?: (html: Buffer, pageUrl: string) => Promise<Buffer>;
   stepTimeoutMs?: number;
   downloadTimeoutMs?: number;
@@ -592,8 +597,10 @@ function sdkFailure(err: unknown): PrintFailure {
 async function defaultFetch(
   url: string,
   timeoutMs: number,
+  cookie?: string,
 ): Promise<{ bytes: Buffer; contentType: string }> {
   const response = await fetch(url, {
+    headers: cookie ? { Cookie: cookie } : undefined,
     redirect: 'follow',
     signal: AbortSignal.timeout(timeoutMs),
   });
@@ -889,7 +896,8 @@ export async function printDocument(
       );
     }
     const fetched = await (
-      deps.fetchFile ?? ((url: string) => defaultFetch(url, deps.downloadTimeoutMs ?? 60_000))
+      deps.fetchFile ??
+      ((url: string) => defaultFetch(url, deps.downloadTimeoutMs ?? 60_000, deps.fileCookie?.(url)))
     )(fileUrl);
     let pdf = fetched.bytes;
     let pdfSource: 'priority' | 'html-converted' = 'priority';

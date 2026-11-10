@@ -534,6 +534,32 @@ describe('printDocument procedure', () => {
     expect(outcome).toMatchObject({ status: 'failed', reason: 'download-unauthenticated' });
   });
 
+  it('sends the Web SDK session cookie with the default netfiles download', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(new Uint8Array(PDF), { headers: { 'content-type': 'application/pdf' } }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      const fileCookie = vi.fn(() => 'PriUserV2=abc');
+      const { outcome } = await run(
+        'ORDERS',
+        'SO26000419',
+        [{ ORDNAME: 'SO26000419' }],
+        orderSteps(),
+        { deps: { fetchFile: undefined, fileCookie } },
+      );
+      expect(outcome).toMatchObject({ status: 'ok', pdfSource: 'priority' });
+      expect(fileCookie).toHaveBeenCalledWith('https://files.example/netfiles/order.pdf');
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://files.example/netfiles/order.pdf',
+        expect.objectContaining({ headers: { Cookie: 'PriUserV2=abc' } }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('says how to install Chrome when HTML comes back and conversion is unavailable', async () => {
     const { outcome } = await run(
       'ORDERS',
