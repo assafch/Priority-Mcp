@@ -65,6 +65,12 @@ export interface WebSdkForm {
   ): Promise<WebSdkProcStep>;
   activateEnd(): Promise<unknown>;
   endCurrentForm(): Promise<unknown>;
+  /** Open a sub-form of the active row (read paths only use getRows on it). */
+  startSubForm?(
+    formName: string,
+    onMessage: (message: WebSdkServerMessage) => void,
+    onUpdate: null,
+  ): Promise<WebSdkForm>;
   warningConfirm?(ok: 0 | 1): void;
   infoMsgConfirm?(): void;
 }

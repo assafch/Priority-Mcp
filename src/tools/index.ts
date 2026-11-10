@@ -5,6 +5,7 @@ import { toolRegistry } from '../lib/tool-registry.js';
 import { registerActivityTools } from './activities.js';
 import { registerCapabilityTools } from './capabilities.js';
 import { registerCloseInvoiceTool } from './close-invoice.js';
+import { registerCustomerLedgerTool } from './customer-ledger.js';
 import { registerCustomerTools } from './customers.js';
 import { registerDebtTools } from './debts.js';
 import { registerDocumentTools } from './documents.js';
@@ -44,6 +45,8 @@ export function registerAllTools(server: McpServer, client: PriorityClient, conf
   registerCloseInvoiceTool(gated, client, config);
   // Official print layout via the same Web SDK (display mode; does not finalize).
   registerPrintDocumentTool(gated, client, config);
+  // כרטסת לקוח via the same Web SDK (read-only form read), rendered as a PDF statement.
+  registerCustomerLedgerTool(gated, client, config);
   registerOrderTools(gated, client, config);
   registerProductTools(gated, client, config);
   registerSalesReportTools(gated, client, config);
