@@ -24,6 +24,9 @@ export interface GoodsLine {
   part: string; // PARTNAME (purchased SKU)
   qty: number; // TQUANT
   price?: number; // PRICE (unit price; omit to take it from the order)
+  /** A charge on the supplier's invoice that is NOT on the purchase order (carriage, pallets). */
+  extra?: boolean;
+  description?: string; // PDES for an extra line on a generic part
 }
 
 export interface CostLine {
@@ -474,5 +477,285 @@ export function computeLandedCost(snapshot: ImpfileSnapshot): {
     lines,
     warnings,
     note: "Estimate only — Priority's calc spreads each cost by its part's loading method; the authoritative landed cost is the product cost after תמחיר. Import VAT is excluded (recoverable).",
+  };
+}
+
+// ───────────────────────────────────────────── Goods invoice against a purchase order
+//
+// When ORDNAME is on a PINVOICES header, Priority copies the order's lines into the invoice by
+// itself (PRSOURCENAME='הזמנה', line ORDNAME set). Sending the same lines in the POST therefore
+// doubled them: a draft of 15.11.2026 ended with every line twice and twice the total, and an
+// older final invoice carries a zero-quantity twin of the same kind. So the header is sent
+// ALONE and the lines Priority pulled are then brought to the invoice: quantity/price corrected,
+// order lines that are not on this invoice removed. Nothing here talks to Priority.
+
+type Line = Record<string, unknown>;
+/** Money totals: equal to the cent. Quantities and unit prices use the exact qtyEq instead. */
+const close = (a: number, b: number) => Math.abs(a - b) < 0.005;
+
+/** Header-only body for a goods invoice against a PO — no lines (Priority pulls them). */
+export function buildGoodsInvoiceHeader(header: InvoiceHeaderInput): WriteBody {
+  return buildHeader(header);
+}
+
+export interface PlannedGoodsLine {
+  part: string;
+  qty: number;
+  price: number;
+  priceSource: 'invoice' | 'order';
+  lineTotal: number;
+  /** The order line this invoice line is linked to; null for a charge that is not on the order. */
+  poLine: unknown;
+  poOpenQuantity: number | null;
+  notOnOrder?: true;
+}
+
+export interface GoodsPlan {
+  ok: boolean;
+  /** Reasons nothing may be sent. */
+  problems: string[];
+  warnings: string[];
+  lines: PlannedGoodsLine[];
+  expectedTotal: number;
+  /** Open order lines Priority will pull that are NOT on this invoice (they get removed). */
+  orderLinesNotOnInvoice: Array<{ poLine: unknown; part: unknown; openQuantity: number }>;
+}
+
+/**
+ * Check the requested lines against the purchase order BEFORE anything is written, and work out
+ * the invoice Priority should end with. A part that is not on the order, or sits on two order
+ * lines, is a problem: the tool refuses instead of guessing which line is meant.
+ */
+export function planGoodsInvoice(input: {
+  supplier: string;
+  currency: string;
+  po: string;
+  order: Line | null | undefined;
+  lines: GoodsLine[];
+}): GoodsPlan {
+  const problems: string[] = [];
+  const warnings: string[] = [];
+  const planned: PlannedGoodsLine[] = [];
+  const order = input.order;
+  if (!order) {
+    return {
+      ok: false,
+      problems: [`Purchase order ${input.po} was not found.`],
+      warnings,
+      lines: [],
+      expectedTotal: 0,
+      orderLinesNotOnInvoice: [],
+    };
+  }
+  if (order.SUPNAME !== undefined && String(order.SUPNAME) !== input.supplier)
+    problems.push(
+      `Purchase order ${input.po} belongs to supplier ${order.SUPNAME}, not ${input.supplier}.`,
+    );
+  if (order.CODE !== undefined && String(order.CODE) !== input.currency)
+    warnings.push(`The order is in ${order.CODE}; the invoice was given as ${input.currency}.`);
+  const orderLines = ((order.PORDERITEMS_SUBFORM as Line[] | undefined) ?? []).filter(
+    (l) => l.CLOSEDBOOL !== 'Y',
+  );
+  const seen = new Set<string>();
+  for (const line of input.lines) {
+    if (seen.has(line.part)) {
+      problems.push(
+        `Part ${line.part} appears twice in goodsLines; send one line per part (sum the quantities).`,
+      );
+      continue;
+    }
+    seen.add(line.part);
+    const matches = orderLines.filter((l) => l.PARTNAME === line.part);
+    if (line.extra) {
+      if (matches.length)
+        problems.push(
+          `Part ${line.part} was given in extraLines but it IS on purchase order ${input.po}; send it in goodsLines.`,
+        );
+      else if (line.price === undefined)
+        problems.push(`Extra line ${line.part} needs a price (it has no order to take one from).`);
+      else
+        planned.push({
+          part: line.part,
+          qty: line.qty,
+          price: line.price,
+          priceSource: 'invoice',
+          lineTotal: round2(line.qty * line.price),
+          poLine: null,
+          poOpenQuantity: null,
+          notOnOrder: true,
+        });
+      continue;
+    }
+    if (matches.length === 0) {
+      problems.push(
+        `Part ${line.part} has no open line on purchase order ${input.po}. If it is a charge on the supplier's invoice that is not on the order (carriage, pallets…), send it in extraLines.`,
+      );
+      continue;
+    }
+    if (matches.length > 1) {
+      problems.push(
+        `Part ${line.part} is on ${matches.length} open lines of ${input.po} (lines ${matches
+          .map((m) => m.KLINE)
+          .join(', ')}); the tool will not guess which one this invoice covers.`,
+      );
+      continue;
+    }
+    const po = matches[0];
+    const open = num(po.TBALANCE);
+    const price = line.price ?? num(po.PRICE);
+    if (line.qty > open + 1e-9)
+      warnings.push(
+        `Part ${line.part}: invoice quantity ${line.qty} is more than the order's open quantity ${open}.`,
+      );
+    if (line.price !== undefined && !qtyEq(line.price, num(po.PRICE)))
+      warnings.push(
+        `Part ${line.part}: invoice price ${line.price} differs from the order price ${num(po.PRICE)}.`,
+      );
+    planned.push({
+      part: line.part,
+      qty: line.qty,
+      price,
+      priceSource: line.price === undefined ? 'order' : 'invoice',
+      lineTotal: round2(line.qty * price),
+      poLine: po.KLINE,
+      poOpenQuantity: open,
+    });
+  }
+  const orderLinesNotOnInvoice = orderLines
+    .filter((l) => !seen.has(String(l.PARTNAME)) && num(l.TBALANCE) > 0)
+    .map((l) => ({ poLine: l.KLINE, part: l.PARTNAME, openQuantity: num(l.TBALANCE) }));
+  return {
+    ok: problems.length === 0,
+    problems,
+    warnings,
+    lines: planned,
+    expectedTotal: round2(planned.reduce((s, l) => s + l.lineTotal, 0)),
+    orderLinesNotOnInvoice,
+  };
+}
+
+export type GoodsStep =
+  | { op: 'PATCH'; kline: number; part: string; body: WriteBody }
+  | { op: 'DELETE'; kline: number; part: string; reason: string }
+  | { op: 'POST'; part: string; body: WriteBody };
+
+/**
+ * Compare the lines Priority actually put on the new draft with the invoice, and list the row
+ * changes that bring the draft to the invoice. `problems` means the draft cannot be finished
+ * automatically (a requested part was not pulled from the order, or was pulled twice).
+ */
+export function reconcileGoodsLines(input: {
+  po: string;
+  requested: GoodsLine[];
+  actual: Line[];
+}): { steps: GoodsStep[]; problems: string[] } {
+  const steps: GoodsStep[] = [];
+  const problems: string[] = [];
+  const keep = new Set<unknown>();
+  const adds: GoodsStep[] = [];
+  for (const want of input.requested) {
+    if (want.extra) {
+      // Not on the order, so Priority pulled nothing for it: it is added as a manual line.
+      const body: WriteBody = { PARTNAME: want.part, TQUANT: want.qty, PRICE: want.price };
+      if (want.description) body.PDES = want.description;
+      adds.push({ op: 'POST', part: want.part, body });
+      continue;
+    }
+    const pulled = input.actual.filter((l) => l.PARTNAME === want.part && l.ORDNAME === input.po);
+    if (pulled.length !== 1) {
+      problems.push(
+        pulled.length === 0
+          ? `Priority did not pull a line for part ${want.part} from ${input.po}.`
+          : `Priority pulled ${pulled.length} lines for part ${want.part} from ${input.po}.`,
+      );
+      for (const l of pulled) keep.add(l.KLINE);
+      continue;
+    }
+    const line = pulled[0];
+    keep.add(line.KLINE);
+    const body: WriteBody = {};
+    if (!qtyEq(num(line.TQUANT), want.qty)) body.TQUANT = want.qty;
+    if (want.price !== undefined && !qtyEq(num(line.PRICE), want.price)) body.PRICE = want.price;
+    if (Object.keys(body).length)
+      steps.push({ op: 'PATCH', kline: num(line.KLINE), part: want.part, body });
+  }
+  for (const line of input.actual) {
+    if (keep.has(line.KLINE)) continue;
+    steps.push({
+      op: 'DELETE',
+      kline: num(line.KLINE),
+      part: String(line.PARTNAME),
+      reason:
+        line.ORDNAME === input.po
+          ? 'order line that is not on this invoice'
+          : 'line not linked to the purchase order',
+    });
+  }
+  // Corrections and removals first, on the lines read from the draft; new lines last.
+  steps.push(...adds);
+  return { steps, problems };
+}
+
+export interface GoodsInvoiceCheck {
+  verified: boolean;
+  expected: { lineCount: number; total: number };
+  observed: { lineCount: number; total: number; headerTotal: number | null };
+  mismatches: string[];
+}
+
+/**
+ * The read-back check: exactly the invoice's lines, each goods line linked to the order (extra
+ * charges are the only unlinked ones), quantities and prices as sent, and the header's pre-VAT
+ * total equal to Σ quantity × price.
+ */
+export function checkGoodsInvoice(input: {
+  po: string;
+  requested: GoodsLine[];
+  invoice: Line;
+}): GoodsInvoiceCheck {
+  const actual = (input.invoice.PINVOICEITEMS_SUBFORM as Line[] | undefined) ?? [];
+  const mismatches: string[] = [];
+  if (actual.length !== input.requested.length)
+    mismatches.push(`The invoice has ${actual.length} lines; ${input.requested.length} were sent.`);
+  let expectedTotal = 0;
+  for (const want of input.requested) {
+    const lines = actual.filter((l) => l.PARTNAME === want.part);
+    if (lines.length !== 1) {
+      mismatches.push(`Part ${want.part} is on ${lines.length} lines (expected 1).`);
+      expectedTotal += round2(want.qty * (want.price ?? num(lines[0]?.PRICE)));
+      continue;
+    }
+    const line = lines[0];
+    const price = want.price ?? num(line.PRICE);
+    expectedTotal += round2(want.qty * price);
+    if (!qtyEq(num(line.TQUANT), want.qty))
+      mismatches.push(`Part ${want.part}: quantity ${line.TQUANT}, sent ${want.qty}.`);
+    if (!qtyEq(num(line.PRICE), price))
+      mismatches.push(`Part ${want.part}: price ${line.PRICE}, sent ${price}.`);
+    if (want.extra) {
+      if (line.ORDNAME === input.po)
+        mismatches.push(`Part ${want.part}: sent as not-on-order but the line is linked to it.`);
+    } else if (line.ORDNAME !== input.po)
+      mismatches.push(`Part ${want.part}: the line is not linked to order ${input.po}.`);
+  }
+  for (const line of actual)
+    if (!input.requested.some((w) => w.part === line.PARTNAME))
+      mismatches.push(`Line ${line.KLINE} (${line.PARTNAME}) is not on the invoice that was sent.`);
+  const total = round2(expectedTotal);
+  const observedTotal = round2(actual.reduce((s, l) => s + num(l.QPRICE), 0));
+  const headerTotal =
+    input.invoice.QPRICE === undefined || input.invoice.QPRICE === null
+      ? null
+      : round2(num(input.invoice.QPRICE));
+  if (!close(observedTotal, total))
+    mismatches.push(`The lines add up to ${observedTotal}; the invoice sent adds up to ${total}.`);
+  if (headerTotal === null) mismatches.push('The header total (QPRICE) could not be read.');
+  else if (!close(headerTotal, total))
+    mismatches.push(`The header total is ${headerTotal}; the invoice sent adds up to ${total}.`);
+  return {
+    verified: mismatches.length === 0,
+    expected: { lineCount: input.requested.length, total },
+    observed: { lineCount: actual.length, total: observedTotal, headerTotal },
+    mismatches,
   };
 }

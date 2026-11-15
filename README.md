@@ -219,9 +219,9 @@ Identical concurrent cacheable reads share one request. A bounded process-local 
 
 Read [performance and rollout](docs/performance-rollout.md) for limits, measurements, opt-in profile, private aliases, rollback and the separately authorized live pilot. Local offline verification does not establish live ERP speed or model quality.
 
-## Tools (112)
+## Tools (114)
 
-The **unreleased faster/smarter update** retains all 105 legacy tools and adds resolver, typed query preparation, three read workflows, and `priority_close_invoice`. `priority_print_document` brings the catalog to 112. The legacy 0.2.0 inventory includes: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, `priority_update_line`, and `priority_print_document`. Generic document operations now accept validated composite keys.
+The **unreleased faster/smarter update** retains all 105 legacy tools and adds resolver, typed query preparation, three read workflows, and `priority_close_invoice`. `priority_print_document` brings the catalog to 112; `priority_customer_ledger` and `priority_delete_line` make it 114. The legacy 0.2.0 inventory includes: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, `priority_update_line`, and `priority_print_document`. Generic document operations now accept validated composite keys.
 
 ### Official print (1)
 
@@ -282,6 +282,7 @@ names with the discovery tools *before* querying or writing.
 | `priority_create_record` | Write | POST a record; supports **deep-insert** (header + sub-form line arrays in one call) |
 | `priority_update_record` | Write | PATCH fields on an existing record |
 | `priority_add_line` | Write | POST a single line to a record's sub-form (navigation property) |
+| `priority_delete_line` | Write | DELETE one identified sub-form row from a draft document — preview by default, refused on final documents, verified by re-read |
 
 The three write tools take **`confirm`** (default **`false`**). With `confirm:false` they return a
 DRY-RUN preview of the exact HTTP method, endpoint URL, and JSON body — **nothing is sent**. Set
@@ -413,7 +414,7 @@ Hebrew and spaces are fine inside quotes (values are percent-encoded automatical
 |:-----|:----:|:------------|
 | `priority_list_attachments` | Read | Attachments for any entity |
 | `priority_get_attachment_url` | Read | Stored path/metadata for one attachment (this API exposes no download URL) |
-| `priority_upload_attachment` | Write | Attach a file to a document — POSTs to the parent's attachments sub-form (auto-detected), then verifies by re-read |
+| `priority_upload_attachment` | Write | Attach a file to a document — a local file (`localPath`) or base64 is sent as a data URI in `EXTFILENAME`; verified by re-reading the stored bytes (SHA-256) |
 
 ### Meta / Admin (7)
 
@@ -438,7 +439,7 @@ against purchase orders, run pre-close diagnostics, and estimate landed cost. Se
 | `impfile_get` | Read | Full snapshot — aggregates all 7 sub-forms (invoices, costs, customs estimate, goods, PO lines) |
 | `impfile_open` | Write | Open a new import file (POST IMPFILES) |
 | `impfile_update` | Write | Update file header / status (PATCH IMPFILES) |
-| `pinvoice_create` | Write | Record a supplier invoice — **goods** or **broker** mode (the `מע'מ` VAT-from-declaration line, cost parts, customs) |
+| `pinvoice_create` | Write | Record a supplier invoice — **goods** or **broker** mode (the `מע'מ` VAT-from-declaration line, cost parts, customs). Goods + `po`: header only, then the lines Priority pulls from the order are reconciled and read back |
 | `impfile_link_invoice` | Write | Link an invoice to a file — `header` (PINVOICES), `line` (IMPFILEIV/IMPFILEIVS_SUBFORM per KLINE) or `final` (PIVDETAILS); storno / relink guards |
 | `impfile_manual_alloc` | Write | Add a manual cost/product allocation line (coded-not-observed on this company) |
 | `impfile_expected_costs` | Write | Record expected costs (feeds the expected/actual report) |

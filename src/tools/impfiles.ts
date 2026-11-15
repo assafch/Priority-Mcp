@@ -11,14 +11,25 @@ import {
   brokerHasLines,
   buildBrokerInvoiceBody,
   buildGoodsInvoiceBody,
+  buildGoodsInvoiceHeader,
+  checkGoodsInvoice,
   computeLandedCost,
   matchThreeWay,
+  planGoodsInvoice,
   preflight,
+  reconcileGoodsLines,
 } from '../lib/impfiles-logic.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
-import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import { deleteRowVerified } from '../lib/subform-rows.js';
+import {
+  checkWriteAllowed,
+  dryRunResult,
+  previewOrBlock,
+  textResult,
+  unavailableHere,
+} from '../lib/write-guard.js';
 import {
   verifyLineCreate,
   verifyRecordCreate,
@@ -230,6 +241,267 @@ async function linkInvoiceFinal(client: PriorityClient, config: Config, p: LinkP
   });
 }
 
+/** Lines of a supplier invoice are keyed by KLINE (PINVOICEITEMS — read from its metadata). */
+const PINVOICE_LINES = 'PINVOICEITEMS_SUBFORM';
+const PINVOICE_LINE_KEY = ['KLINE'];
+
+interface GoodsPoParams {
+  supplier: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  currency: string;
+  impfnum: string;
+  po: string;
+  goodsLines: Array<{
+    part: string;
+    qty: number;
+    price?: number;
+    extra?: boolean;
+    description?: string;
+  }>;
+  dryRun: boolean;
+}
+
+/** Non-cancelled supplier invoices that already carry this supplier's invoice number. */
+async function existingInvoicesFor(client: PriorityClient, supplier: string, booknum: string) {
+  const qb = new ODataBuilder()
+    .eq('SUPNAME', sanitizeODataValue(supplier))
+    .eq('BOOKNUM', sanitizeODataValue(booknum))
+    .select('IVNUM', 'DEBIT', 'IVTYPE', 'STATDES', 'FINAL', 'STORNOFLAG', 'QPRICE', 'IMPFNUM')
+    .top(10);
+  const found = await client.list<Row>('PINVOICES', qb.build(), { cache: false });
+  return found.value.filter((r) => r.STORNOFLAG !== 'Y');
+}
+
+/**
+ * Goods invoice against a purchase order.
+ *
+ * Priority copies the order's lines into the invoice as soon as ORDNAME is on the header, so the
+ * header is POSTed ALONE; the pulled lines are then set to the invoice's quantities/prices and
+ * order lines that are not on the invoice are removed. The result is read back and checked:
+ * exactly the lines sent, each linked to the order, total = Σ quantity × price.
+ */
+async function createGoodsInvoiceFromPo(client: PriorityClient, config: Config, p: GoodsPoParams) {
+  const orders = await client.list<Row>(
+    'PORDERS',
+    new ODataBuilder()
+      .eq('ORDNAME', sanitizeODataValue(p.po))
+      .expand('PORDERITEMS_SUBFORM')
+      .top(1)
+      .build(),
+    { cache: false },
+  );
+  const plan = planGoodsInvoice({
+    supplier: p.supplier,
+    currency: p.currency,
+    po: p.po,
+    order: orders.value[0],
+    lines: p.goodsLines,
+  });
+  const duplicates = await existingInvoicesFor(client, p.supplier, p.invoiceNumber);
+  const header = buildGoodsInvoiceHeader({
+    supplier: p.supplier,
+    invoiceNumber: p.invoiceNumber,
+    invoiceDate: p.invoiceDate,
+    currency: p.currency,
+    impfnum: p.impfnum,
+    po: p.po,
+  });
+  const planned = {
+    purchaseOrder: p.po,
+    expectedLines: plan.lines,
+    expectedLineCount: plan.lines.length,
+    expectedTotal: plan.expectedTotal,
+    orderLinesThatWillBeRemoved: plan.orderLinesNotOnInvoice,
+    warnings: plan.warnings,
+  };
+  const blockers = [
+    ...plan.problems,
+    ...duplicates.map(
+      (d) =>
+        `Supplier ${p.supplier} already has invoice ${d.IVNUM} (${d.STATDES ?? 'no status'}) with number "${p.invoiceNumber}". Fix that document instead of creating a second one.`,
+    ),
+  ];
+  if (blockers.length) {
+    return {
+      ...textResult({
+        status: 'refused',
+        created: false,
+        acknowledged: false,
+        verified: false,
+        verification: { reason: 'Checks before the write failed; nothing was sent.' },
+        problems: blockers,
+        existingInvoices: duplicates,
+        ...planned,
+      }),
+      isError: true as const,
+    };
+  }
+  if (p.dryRun) {
+    return dryRunResult('CREATE GOODS SUPPLIER INVOICE FROM PURCHASE ORDER', {
+      steps: [
+        { step: 1, method: 'POST', form: 'PINVOICES', body: header },
+        {
+          step: 2,
+          what: `Priority copies the open lines of ${p.po} into the draft; each is set to the invoice quantity/price, order lines that are not on the invoice are deleted, and extraLines are added as manual lines.`,
+        },
+        { step: 3, what: 'Read back: line count, order link on every line, total.' },
+      ],
+      ...planned,
+    });
+  }
+  const guard = checkWriteAllowed(config);
+  if (guard.blocked) return guard.result;
+
+  let created: Row;
+  try {
+    created = await client.create<Row>('PINVOICES', header);
+  } catch (error) {
+    const code = (error as { statusCode?: number }).statusCode;
+    const rejected = code !== undefined && code >= 400 && code < 500 && code !== 408;
+    return {
+      ...textResult({
+        status: rejected ? 'failed' : 'unknown',
+        created: false,
+        acknowledged: false,
+        verified: false,
+        verification: {
+          reason: rejected
+            ? `Priority refused the invoice header; nothing was created: ${(error as Error).message}`
+            : `The header POST did not finish cleanly: ${(error as Error).message}. Before trying again, check whether a draft with number "${p.invoiceNumber}" now exists for supplier ${p.supplier}.`,
+        },
+        ...planned,
+      }),
+      isError: true as const,
+    };
+  }
+  client.invalidateCache('IMPFILES');
+  const ivnum = created.IVNUM;
+  if (typeof ivnum !== 'string' || !ivnum) {
+    return {
+      ...textResult({
+        status: 'unknown',
+        created: false,
+        acknowledged: true,
+        verified: false,
+        verification: {
+          reason: `Priority accepted the header but returned no IVNUM. Do NOT create it again: find the draft by supplier ${p.supplier} and number "${p.invoiceNumber}".`,
+        },
+        response: created,
+      }),
+      isError: true as const,
+    };
+  }
+  const keys = { IVNUM: ivnum, DEBIT: 'D', IVTYPE: 'P' };
+  const read = () =>
+    client.get<Row>('PINVOICES', keys, `?$expand=${PINVOICE_LINES}`, { cache: false });
+  /** A stop after the header exists: say exactly what is there and that it must not be re-created. */
+  const incomplete = (reason: string, extra: Row = {}) => ({
+    ...textResult({
+      status: 'incomplete',
+      created: false,
+      acknowledged: true,
+      verified: false,
+      invoice: { IVNUM: ivnum, DEBIT: 'D', IVTYPE: 'P' },
+      verification: { reason },
+      doNotCreateAgain: `Draft ${ivnum} exists. Do NOT call pinvoice_create again for this invoice — finish this draft with priority_update_line / priority_delete_line, or ask the owner.`,
+      ...planned,
+      ...extra,
+    }),
+    isError: true as const,
+  });
+
+  const done: unknown[] = [];
+  try {
+    const draft = await read();
+    const actual = (draft[PINVOICE_LINES] as Row[] | undefined) ?? [];
+    const { steps, problems } = reconcileGoodsLines({
+      po: p.po,
+      requested: p.goodsLines,
+      actual,
+    });
+    if (problems.length)
+      return incomplete('The lines Priority pulled from the order do not cover the invoice.', {
+        problems,
+        linesOnDraft: actual,
+        remainingSteps: steps,
+      });
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const rowKeys = { KLINE: step.op === 'POST' ? 0 : step.kline };
+      try {
+        if (step.op === 'POST') {
+          await client.addLine('PINVOICES', keys, PINVOICE_LINES, step.body);
+        } else if (step.op === 'PATCH') {
+          await client.updateSubformRow('PINVOICES', keys, PINVOICE_LINES, rowKeys, step.body);
+        } else {
+          const outcome = await deleteRowVerified(
+            client,
+            'PINVOICES',
+            keys,
+            PINVOICE_LINES,
+            rowKeys,
+            PINVOICE_LINE_KEY,
+          );
+          if (!outcome.verified) throw new Error(outcome.verification.reason);
+        }
+        done.push(step);
+      } catch (error) {
+        return incomplete(
+          `${step.op} of line ${step.op === 'POST' ? '(new)' : step.kline} (${step.part}) failed: ${(error as Error).message}`,
+          { stepsDone: done, remainingSteps: steps.slice(i) },
+        );
+      }
+    }
+    const final = await read();
+    const check = checkGoodsInvoice({ po: p.po, requested: p.goodsLines, invoice: final });
+    if (!check.verified)
+      return incomplete('The read-back does not match the invoice that was sent.', {
+        check,
+        stepsDone: done,
+        linesOnDraft: final[PINVOICE_LINES],
+      });
+    return textResult({
+      status: 'verified',
+      created: true,
+      acknowledged: true,
+      verified: true,
+      invoice: {
+        IVNUM: ivnum,
+        DEBIT: 'D',
+        IVTYPE: 'P',
+        BOOKNUM: final.BOOKNUM,
+        ORDNAME: final.ORDNAME,
+        IMPFNUM: final.IMPFNUM,
+        STATDES: final.STATDES,
+        CODE: final.CODE,
+        QPRICE: final.QPRICE,
+        TOTPRICE: final.TOTPRICE,
+      },
+      lines: ((final[PINVOICE_LINES] as Row[] | undefined) ?? []).map((l) => ({
+        KLINE: l.KLINE,
+        PARTNAME: l.PARTNAME,
+        TQUANT: l.TQUANT,
+        PRICE: l.PRICE,
+        QPRICE: l.QPRICE,
+        ORDNAME: l.ORDNAME,
+        PRSOURCENAME: l.PRSOURCENAME,
+      })),
+      verification: {
+        reason:
+          'Read back: exactly the lines sent, each goods line linked to the order, total matches.',
+        ...check,
+      },
+      stepsDone: done,
+      warnings: plan.warnings,
+    });
+  } catch (error) {
+    return incomplete(`Reading the new draft failed: ${(error as Error).message}`, {
+      stepsDone: done,
+    });
+  }
+}
+
 export function registerImpfileTools(server: McpServer, client: PriorityClient, config: Config) {
   // --------------------------------------------------------------------- Read
 
@@ -413,18 +685,38 @@ Only the fields you pass are changed. NOTE: country-of-origin is PER-LINE in the
     'pinvoice_create',
     `רישום חשבונית ספק לתיק יבוא (POST PINVOICES). Record a supplier invoice linked to an import file.
 
+invoiceNumber is the number PRINTED ON THE SUPPLIER'S INVOICE (the document titled Invoice /
+Tax Invoice, often prefixed e.g. "RI", "INV"). It is NOT the supplier's sales-order /
+order-confirmation number (often prefixed "SO"), not our PO number and not a delivery-note number. If the document in hand shows only an order number, it is not the
+invoice — find the invoice before recording anything.
+
 Two modes:
   • goods  — foreign supplier + currency; one line per purchased SKU (price optional → from the order).
+    With 'po': Priority copies the order's lines into the invoice by itself, so the tool sends the
+    header ALONE, then sets each pulled line to the invoice quantity/price and deletes order lines
+    that are not on this invoice. It then re-reads the draft and reports verified only if it holds
+    exactly the lines sent, each linked to the order, with total = Σ quantity × price. Every part
+    must be on exactly one open line of the order, and the supplier must not already have an
+    invoice with this number — otherwise nothing is sent. A charge that is printed on the
+    supplier's invoice but is NOT on the order (carriage, pallets, a surcharge) goes in
+    'extraLines'; it is added as a manual line and counted in the total. If the result says status "incomplete",
+    a draft EXISTS: do not call this tool again for the same invoice; fix that draft.
   • broker — forwarder/customs-broker invoice: cost lines on cost parts, an optional C-loaded customs
     (מכס) line, and one VAT-from-declaration line per declaration on the '${VAT_DECLARATION_PART}' system
     part (VATFLAG=Y, carrying the declaration). Amounts stay in the source currency — Priority applies FX.
 Links to the file via header IMPFNUM + OTYPE='P'; DEBIT='D'.
 
-⚠️ WRITE. dryRun=true (default) previews the exact deep-insert body.`,
+⚠️ WRITE. dryRun=true (default) previews the exact body; for goods + po it also reads the order
+(read-only) and shows the lines and total the invoice will end with.`,
     {
       mode: z.enum(['goods', 'broker']),
       supplier: z.string().min(1).describe('SUPNAME (goods supplier or forwarder)'),
-      invoiceNumber: z.string().min(1).describe("Supplier's printed invoice number (BOOKNUM)"),
+      invoiceNumber: z
+        .string()
+        .min(1)
+        .describe(
+          "The invoice number printed on the supplier's invoice → BOOKNUM. Never the supplier's sales-order (SO) number, an order confirmation or our PO number.",
+        ),
       invoiceDate: z.string().min(1).describe('IVDATE (YYYY-MM-DD)'),
       currency: z.string().min(1).describe('CODE (foreign for goods; ILS for broker)'),
       impfnum: z.string().min(1).describe('IMPFNUM to link'),
@@ -438,7 +730,23 @@ Links to the file via header IMPFNUM + OTYPE='P'; DEBIT='D'.
           }),
         )
         .optional()
-        .describe('goods mode: purchased SKU lines'),
+        .describe('goods mode: purchased SKU lines (with po: parts that are on the order)'),
+      extraLines: z
+        .array(
+          z.object({
+            part: z
+              .string()
+              .min(1)
+              .describe("PARTNAME of the charge (e.g. the generic part '000')"),
+            qty: z.number().positive().default(1),
+            price: z.number().describe('unit price, invoice currency'),
+            description: z.string().max(100).optional().describe('line description → PDES'),
+          }),
+        )
+        .optional()
+        .describe(
+          "goods mode with po: charges on the supplier's invoice that are NOT on the purchase order (carriage, pallets, surcharge)",
+        ),
       costLines: z
         .array(
           z.object({
@@ -506,10 +814,24 @@ Links to the file via header IMPFNUM + OTYPE='P'; DEBIT='D'.
                 'goods lines without a price require a `po` so Priority can source the price from the order.',
             });
           }
-          body = buildGoodsInvoiceBody({
-            header: { ...baseHeader, po: p.po },
-            lines: p.goodsLines,
-          });
+          if (p.po) {
+            return await createGoodsInvoiceFromPo(client, config, {
+              ...baseHeader,
+              po: p.po,
+              goodsLines: [
+                ...p.goodsLines,
+                ...(p.extraLines ?? []).map((l) => ({ ...l, extra: true })),
+              ],
+              dryRun: p.dryRun,
+            });
+          }
+          if (p.extraLines?.length) {
+            return textResult({
+              error:
+                'extraLines is for goods invoices with a po; without one, put every line in goodsLines.',
+            });
+          }
+          body = buildGoodsInvoiceBody({ header: baseHeader, lines: p.goodsLines });
         } else {
           if (!brokerHasLines(p)) {
             return textResult({
@@ -518,9 +840,10 @@ Links to the file via header IMPFNUM + OTYPE='P'; DEBIT='D'.
             });
           }
           // Reject goods lines in broker mode (a forwarder invoice has no purchased SKUs / PO).
-          if (p.goodsLines?.length) {
+          if (p.goodsLines?.length || p.extraLines?.length) {
             return textResult({
-              error: 'broker mode ignores goodsLines — use mode="goods" for purchased SKUs.',
+              error:
+                'broker mode ignores goodsLines/extraLines — use mode="goods" for purchased SKUs.',
             });
           }
           body = buildBrokerInvoiceBody({

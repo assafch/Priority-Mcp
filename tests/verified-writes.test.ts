@@ -361,11 +361,25 @@ describe('named key schema checks at client boundary', () => {
       'fetch',
       vi.fn(async (url, init) => {
         methods.push(init.method);
+        // A sub-form is a navigation property of its parent, not an entity: Priority answers
+        // HTTP 500 for GetMetadataFor(entity='ORDERITEMS_SUBFORM') (seen live 15.11.2026).
+        if (url.includes("entity='ORDERITEMS_SUBFORM'"))
+          return respond({ error: { message: 'entity ORDERITEMS_SUBFORM not found' } }, 500);
         if (url.includes('GetMetadataFor'))
           return respond({
             $Version: '4.0',
             'Priority.OData': {
-              ORDERITEMS_SUBFORM: {
+              ORDERS: {
+                $Kind: 'EntityType',
+                $Key: ['ORDNAME'],
+                ORDNAME: {},
+                ORDERITEMS_SUBFORM: {
+                  $Kind: 'NavigationProperty',
+                  $Collection: true,
+                  $Type: 'Priority.OData.ORDERITEMS',
+                },
+              },
+              ORDERITEMS: {
                 $Kind: 'EntityType',
                 $Key: ['KLINE'],
                 KLINE: { $Type: 'Edm.Int32' },
@@ -385,7 +399,7 @@ describe('named key schema checks at client boundary', () => {
         confirm: true,
       }),
     ).toMatchObject({ updated: true, verified: true });
-    expect(methods).toEqual(['GET', 'PATCH', 'GET']);
+    expect(methods).toEqual(['GET', 'GET', 'PATCH', 'GET']);
   });
 });
 
