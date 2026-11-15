@@ -1,45 +1,37 @@
+#!/usr/bin/env node
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createServer as createHttpServer } from 'node:http';
-import { randomUUID } from 'node:crypto';
 import { loadConfig } from './config.js';
+import { startHttpServer } from './http.js';
 import { createLogger } from './logger.js';
 import { createServer } from './server.js';
 
 const config = loadConfig();
 const logger = createLogger(config);
-const mcpServer = createServer(config, logger);
-
+let close: () => Promise<void>;
 if (config.mcpTransport === 'stdio') {
-  const transport = new StdioServerTransport();
-  await mcpServer.connect(transport);
+  const server = createServer(config, logger);
+  await server.connect(new StdioServerTransport());
+  close = () => server.close();
   logger.info('Priority MCP server running on stdio');
 } else {
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
-
-  await mcpServer.connect(transport);
-
-  const httpServer = createHttpServer(async (req, res) => {
-    const url = new URL(req.url ?? '/', `http://localhost:${config.mcpHttpPort}`);
-
-    if (url.pathname === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'ok', server: 'priority-mcp-server' }));
-      return;
-    }
-
-    if (url.pathname === '/mcp') {
-      await transport.handleRequest(req, res);
-      return;
-    }
-
-    res.writeHead(404);
-    res.end('Not found');
-  });
-
-  httpServer.listen(config.mcpHttpPort, () => {
-    logger.info({ port: config.mcpHttpPort }, 'Priority MCP server running on HTTP');
-  });
+  try {
+    const runtime = await startHttpServer(config, logger);
+    close = runtime.close;
+  } catch {
+    logger.error('HTTP startup failed. Check bind address, port and bearer token configuration.');
+    process.exit(1);
+  }
 }
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await close();
+  } catch {
+    logger.error('Server shutdown failed');
+    process.exitCode = 1;
+  }
+}
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "fixtureVersion": "2026-10-25-frozen-v2",
+  "kind": "synthetic-deterministic-engine-evaluation",
+  "frozenAt": "2026-10-25",
+  "counts": {
+    "total": 120,
+    "development": 80,
+    "held-out": 40,
+    "categories": {
+      "entity": 40,
+      "query": 30,
+      "workflow-report": 30,
+      "guard": 20
+    }
+  },
+  "files": {
+    "development.json": "ee18e14fd47b66afe05b32924ca0492896c9ddb0acb9bbeb4deeac1622fa3d1f",
+    "held-out.json": "a740f19ab1cf613505400617eb475291429ce65c1c9fa1ef1dab363c97b4cf73"
+  },
+  "oracleReview": {
+    "initialRun": "118/120; held-out 40/40 unchanged",
+    "developmentCorrections": [
+      "query-012 expects reversed-range rejection via dateFrom field rather than the literal word before",
+      "workflow-report-020 absent valuation sources require landedCost incomplete and workflow incomplete"
+    ],
+    "heldOutChanged": false
+  }
+}

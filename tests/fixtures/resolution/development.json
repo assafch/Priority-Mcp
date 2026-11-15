@@ -1,0 +1,10 @@
+{
+  "records": [
+    {"CUSTNAME":"0012","CUSTDES":"אורגת סחר"},
+    {"CUSTNAME":"12","CUSTDES":"אורגת מסחר"},
+    {"CUSTNAME":"C3","CUSTDES":"יעד כימיה בעמ"},
+    {"CUSTNAME":"C4","CUSTDES":"יעד כימיה צפון בעמ"},
+    {"CUSTNAME":"C5","CUSTDES":"Blue River Trading"}
+  ],
+  "aliases": [{"alias":"בית כחול","id":"C5"},{"alias":"יעד","id":"C3"},{"alias":"יעד","id":"C4"}]
+}

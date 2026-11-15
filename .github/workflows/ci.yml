@@ -1,47 +1,43 @@
 name: CI
-
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
-
 jobs:
-  lint:
+  verify:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22.13.0, 22, 24]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run lint
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
       - run: npm test
-
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-      - run: npm ci
-      - run: npm run build
-
+      - run: npm run test:mcp
+      - run: npm run evaluate:mcp
+      - run: npm audit --audit-level=moderate
+      - run: npm pack --dry-run
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t priority-mcp-server:test .
+      - name: Offline container health check
+        run: |
+          docker run -d --name priority-smoke -p 127.0.0.1:3000:3000 -e PRIORITY_SERVICE_ROOT=https://example.invalid/odata/Priority/offline/demo -e PRIORITY_PAT=synthetic -e PRIORITY_READ_ONLY=true -e MCP_HTTP_HOST=0.0.0.0 -e MCP_HTTP_AUTH_TOKEN=synthetic-local-token priority-mcp-server:test
+          for attempt in 1 2 3 4 5; do
+            if curl --fail http://127.0.0.1:3000/health; then ready=1; break; fi
+            sleep 1
+          done
+          if [ "${ready:-0}" != 1 ]; then docker logs priority-smoke; exit 1; fi
+          code=$(curl --silent --output /tmp/priority-anonymous-body --write-out '%{http_code}' -X POST http://127.0.0.1:3000/mcp -H 'Content-Type: application/json' -d '{}')
+          test "$code" = 401
+          curl --fail --silent -X POST http://127.0.0.1:3000/mcp -H 'Authorization: Bearer synthetic-local-token' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"docker-smoke","version":"1"}}}' | python3 -c 'import sys; body=sys.stdin.read(); assert "serverInfo" in body and "priority-mcp-server" in body'
+      - if: always()
+        run: docker rm -f priority-smoke || true

@@ -1,39 +1,97 @@
-import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { toMcpError } from '../client/errors.js';
+import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { ODataBuilder } from '../client/odata-builder.js';
-import { toMcpError } from '../client/errors.js';
+import { dateRangeFilter } from '../lib/dates.js';
+import { EntityResolver } from '../lib/entity-resolver.js';
+import { fetchAllPages } from '../lib/paginate.js';
+import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
-import { checkWriteAllowed, dryRunResult, textResult } from '../lib/write-guard.js';
+import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import { verifyRecordCreate } from '../lib/write-verification.js';
+import { createOperation, currentOperation } from '../runtime/operation-context.js';
+import { scanObservation, scanOperationOptions } from '../services/reports/observations.js';
+import { entityResolutionAllowed } from './entity-resolution.js';
+
+const AINVOICES = getSchema('AINVOICES');
 
 export function registerInvoiceTools(server: McpServer, client: PriorityClient, config: Config) {
   server.tool(
     'priority_list_invoices',
     `List invoices with optional filters by date range, customer, and status.
 
-Returns paginated invoice list. Use priority_get_invoice for full details with line items.
-Status values: open, paid, partial — vary by Priority configuration.`,
+Returns a paginated, compact invoice list (key fields only — use priority_get_invoice for full
+detail with line items). Dates filter on IVDATE (the invoice date) and sort by it by default.
+Pass either customerId (the exact CUSTNAME) or customerName (returns verified candidates; names require an explicit customerId selection).`,
     {
-      customerId: z.string().optional().describe('Filter by CUSTNAME'),
+      customerId: z.string().optional().describe('Filter by exact CUSTNAME'),
+      customerName: z
+        .string()
+        .optional()
+        .describe(
+          'Customer name or exact code to resolve safely; ambiguous names return candidates without invoice data',
+        ),
       dateFrom: z.string().optional().describe('Start date (ISO 8601, e.g. "2025-01-01")'),
       dateTo: z.string().optional().describe('End date (ISO 8601)'),
-      status: z.string().optional().describe('Invoice status filter'),
+      status: z.string().optional().describe('Invoice status filter (STATDES)'),
       top: z.number().int().min(1).max(500).default(50),
       skip: z.number().int().min(0).default(0),
-      orderBy: z.enum(['IVNUM', 'CURDATE', 'TOTPRICE']).default('CURDATE'),
+      orderBy: z.enum(['IVNUM', 'IVDATE', 'TOTPRICE']).default('IVDATE'),
       orderDir: z.enum(['asc', 'desc']).default('desc'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
-        const qb = new ODataBuilder().top(params.top).skip(params.skip).orderBy(params.orderBy, params.orderDir);
-        if (params.customerId) qb.eq('CUSTNAME', sanitizeODataValue(params.customerId));
-        if (params.dateFrom) qb.ge('CURDATE', params.dateFrom);
-        if (params.dateTo) qb.le('CURDATE', params.dateTo);
+        const rangeFilter = dateRangeFilter('IVDATE', params.dateFrom, params.dateTo);
+        let customerId = params.customerId;
+        let resolvedCustomer: Record<string, unknown> | undefined;
+
+        // Only a unique exact identifier/reviewed alias may select a customer automatically.
+        if (!customerId && params.customerName) {
+          const resolver = new EntityResolver(client, {
+            authorize: (kind) => entityResolutionAllowed(config, kind),
+          });
+          const context =
+            currentOperation() ??
+            createOperation('priority_list_invoices', {
+              ...(extra?.signal ? { signal: extra.signal } : {}),
+            });
+          const resolution = await resolver.resolveEntity(
+            { kind: 'customer', query: params.customerName, limit: 5 },
+            context,
+          );
+          const chosen = resolution.status === 'resolved' ? resolution.candidates[0] : undefined;
+          if (!chosen || typeof chosen.identity.keys.CUSTNAME !== 'string') {
+            return textResult({
+              invoices: [],
+              customerResolution: resolution,
+              note: 'Choose an exact customerId from verified candidates before requesting invoices. Incomplete absence does not prove that a customer does not exist.',
+            });
+          }
+          customerId = chosen.identity.keys.CUSTNAME;
+          resolvedCustomer = { CUSTNAME: customerId, CUSTDES: chosen.displayName };
+        }
+
+        const qb = new ODataBuilder()
+          .top(params.top)
+          .skip(params.skip)
+          .orderBy(params.orderBy, params.orderDir);
+        if (customerId) qb.eq('CUSTNAME', sanitizeODataValue(customerId));
+        qb.filter(rangeFilter);
+        for (const key of ['IVNUM', 'DEBIT', 'IVTYPE'])
+          if (key !== params.orderBy) qb.orderBy(key, params.orderDir);
         if (params.status) qb.eq('STATDES', sanitizeODataValue(params.status));
+        if (AINVOICES?.defaultSelect) qb.select(...AINVOICES.defaultSelect);
         const result = await client.list('AINVOICES', qb.build());
-        return textResult({ invoices: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+        return textResult({
+          invoices: result.value,
+          ...(resolvedCustomer ? { resolvedCustomer } : {}),
+          pagination: { returned: result.value.length, top: params.top, skip: params.skip },
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -41,7 +99,7 @@ Status values: open, paid, partial — vary by Priority configuration.`,
     'priority_get_invoice',
     `Get a single invoice with full details including line items.
 
-Use IVNUM (invoice number) as the key. Expands line items (AINVOICITEMS_SUBFORM) by default.
+Use IVNUM (invoice number). Expands line items (AINVOICEITEMS_SUBFORM) by default.
 If you don't know the IVNUM, use priority_list_invoices to find it first.`,
     {
       invoiceNumber: z.string().min(1).describe('The IVNUM (invoice number)'),
@@ -49,11 +107,40 @@ If you don't know the IVNUM, use priority_list_invoices to find it first.`,
     },
     async (params) => {
       try {
-        const expands = ['AINVOICITEMS_SUBFORM', ...(params.expand ?? [])];
-        const qb = new ODataBuilder().expand(...expands);
-        const invoice = await client.get('AINVOICES', params.invoiceNumber, qb.build());
-        return textResult(invoice);
-      } catch (err) { throw toMcpError(err); }
+        const expands = ['AINVOICEITEMS_SUBFORM', ...(params.expand ?? [])];
+        // AINVOICES has a COMPOSITE key (IVNUM,DEBIT,IVTYPE) on this install, so a single-value
+        // key predicate — AINVOICES('IV123') — returns 404. Query by $filter on IVNUM instead.
+        const qb = new ODataBuilder()
+          .eq('IVNUM', sanitizeODataValue(params.invoiceNumber))
+          .expand(...expands)
+          .top(5);
+        const result = await client.list<Record<string, unknown>>('AINVOICES', qb.build());
+        const rows = result.value ?? [];
+        if (rows.length === 0) {
+          return textResult({
+            invoice: null,
+            note: `No invoice found with IVNUM "${params.invoiceNumber}".`,
+          });
+        }
+        // A single IVNUM normally maps to one document; surface all rows if more than one.
+        const continuations = rows.flatMap((row) =>
+          Object.entries(row)
+            .filter(([key, value]) => key.endsWith('@odata.nextLink') && typeof value === 'string')
+            .map(([field, nextLink]) => ({ invoiceNumber: row.IVNUM, field, nextLink })),
+        );
+        const completeness = {
+          complete: continuations.length === 0 && !result['@odata.nextLink'],
+          ...(continuations.length ? { stopReason: 'expandedContinuation', continuations } : {}),
+          ...(result['@odata.nextLink'] ? { nextLink: result['@odata.nextLink'] } : {}),
+        };
+        return textResult(
+          rows.length === 1
+            ? { ...rows[0], completeness }
+            : { matches: rows, count: rows.length, completeness },
+        );
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -61,21 +148,83 @@ If you don't know the IVNUM, use priority_list_invoices to find it first.`,
     'priority_get_unpaid_invoices_for_customer',
     `Get all unpaid/open invoices for a specific customer.
 
-Shortcut for collection workflows — returns only invoices with outstanding balance for the given customer.`,
+Returns unreconciled posted invoice signals; this does not prove remaining balance or a due date. Scan completeness and found/returned counts are explicit.`,
     {
       customerId: z.string().min(1).describe('The CUSTNAME'),
       top: z.number().int().min(1).max(500).default(100),
     },
     async (params) => {
       try {
-        const qb = new ODataBuilder()
-          .eq('CUSTNAME', params.customerId)
-          .gt('DEBIT', 0)
-          .top(params.top)
-          .orderBy('PAYDATE', 'asc');
-        const result = await client.list('OPENDEBT', qb.build());
-        return textResult({ customerId: params.customerId, unpaidInvoices: result.value, count: result.value.length });
-      } catch (err) { throw toMcpError(err); }
+        // NOTE: do NOT use OPENINVOICES here. On this install that form holds open
+        // DELIVERY NOTES / RETURNS (DOCCODE "משלק"/"החלק") awaiting invoicing — NOT issued
+        // tax invoices. Customers whose open A/R is made up of issued-but-unreconciled
+        // invoices (the common case) show ZERO rows there, which silently hid real debt.
+        //
+        // The reliable open-invoice signal is AINVOICES.IVRECONDATE being empty: once a
+        // receipt is reconciled against an invoice it gets a recon date; canceled invoices
+        // also receive one (storno), so an empty IVRECONDATE means "still open". That column
+        // is selectable but NOT filterable — Priority 500s ("Object reference not set") on
+        // `IVRECONDATE eq null` — so we page the customer's invoices and filter client-side.
+        const select = [...(AINVOICES?.defaultSelect ?? []), 'IVRECONDATE'];
+        const firstObservedAt = new Date().toISOString();
+        const scan = await fetchAllPages<Record<string, unknown>>(
+          (skip, top) =>
+            client.list(
+              'AINVOICES',
+              new ODataBuilder()
+                .eq('CUSTNAME', sanitizeODataValue(params.customerId))
+                .select(...new Set([...select, 'IVNUM', 'DEBIT', 'IVTYPE']))
+                .orderBy('IVDATE', 'asc')
+                .orderBy('IVNUM', 'asc')
+                .orderBy('DEBIT', 'asc')
+                .orderBy('IVTYPE', 'asc')
+                .top(top)
+                .skip(skip)
+                .build(),
+            ),
+          {
+            ...scanOperationOptions(),
+            pageSize: 200,
+            maxRows: 5000,
+            fetchNext: (link) => client.listNext(link),
+          },
+        );
+        const open = scan.rows.filter(
+          (row) =>
+            Object.hasOwn(row, 'IVRECONDATE') &&
+            row.IVRECONDATE == null &&
+            row.STATDES === 'סופית' &&
+            !String(row.IVNUM ?? '').startsWith('T'),
+        );
+        const unclassified = scan.rows.filter(
+          (row) =>
+            !Object.hasOwn(row, 'IVRECONDATE') ||
+            (row.IVRECONDATE == null &&
+              row.STATDES == null &&
+              !String(row.IVNUM ?? '').startsWith('T')),
+        ).length;
+        const complete = scan.complete && unclassified === 0;
+        const result = open.slice(0, params.top);
+        return textResult({
+          customerId: params.customerId,
+          unpaidInvoices: result,
+          meta: scanObservation({ ...scan, complete }, firstObservedAt),
+          count: result.length,
+          scan: {
+            ...scan,
+            rows: undefined,
+            complete,
+            ...(unclassified ? { stopReason: 'missingSourceFields', unclassified } : {}),
+            scanned: scan.rows.length,
+            found: open.length,
+            returned: result.length,
+          },
+          remainingBalance: null,
+          note: `Scanned ${scan.rows.length} invoices and found ${open.length} unreconciled posted invoice signals; returned ${result.length}. ${complete ? 'History exhausted.' : `Scan incomplete (${unclassified ? 'missingSourceFields' : scan.stopReason}); additional matches may exist.`} Original invoice totals are not verified remaining debt; use OBLIGO for customer A/R balances and reconciled open-item evidence for invoice debt.`,
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -90,35 +239,47 @@ Can create from scratch with line items, or reference an existing order.
 Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
     {
       customerId: z.string().min(1).describe('CUSTNAME — the customer to invoice'),
-      items: z.array(z.object({
-        productId: z.string().min(1).describe('PARTNAME'),
-        quantity: z.number().positive().describe('Quantity'),
-        price: z.number().optional().describe('Unit price override (uses price list if omitted)'),
-      })).min(1).describe('Invoice line items'),
+      items: z
+        .array(
+          z.object({
+            productId: z.string().min(1).describe('PARTNAME'),
+            quantity: z.number().positive().describe('Quantity'),
+            price: z
+              .number()
+              .optional()
+              .describe('Unit price override (uses price list if omitted)'),
+          }),
+        )
+        .min(1)
+        .describe('Invoice line items'),
       reference: z.string().optional().describe('Reference number or order number'),
       remarks: z.string().optional().describe('Invoice remarks/notes'),
       dryRun: z.boolean().default(true),
     },
     async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
       try {
         const body: Record<string, unknown> = {
           CUSTNAME: params.customerId,
-          AINVOICITEMS_SUBFORM: params.items.map((item) => ({
+          AINVOICEITEMS_SUBFORM: params.items.map((item) => ({
             PARTNAME: item.productId,
             TQUANT: item.quantity,
-            ...(item.price !== undefined ? { IPRICEDATE: item.price } : {}),
+            // Unit-price override goes in PRICE (the line's unit price). IPRICEDATE was a
+            // phantom field — it is not on AINVOICEITEMS_SUBFORM (verified live: the line
+            // price fields are PRICE / DISPRICE / QPRICE), so it was silently dropped.
+            ...(item.price !== undefined ? { PRICE: item.price } : {}),
           })),
         };
         if (params.reference) body.ORDNAME = params.reference;
         if (params.remarks) body.DETAILS = params.remarks;
 
-        if (params.dryRun) return dryRunResult('CREATE INVOICE', body);
+        const gate = previewOrBlock(config, params.dryRun, 'CREATE INVOICE', body);
+        if (gate) return gate;
 
-        const result = await client.create('AINVOICES', body);
-        return textResult({ created: true, invoice: result });
-      } catch (err) { throw toMcpError(err); }
+        const outcome = await verifyRecordCreate(client, 'AINVOICES', body);
+        return textResult({ created: outcome.verified, invoice: outcome.result, ...outcome });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -126,63 +287,82 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
     'priority_void_invoice',
     `Void/cancel an invoice in Priority ERP.
 
-⚠️ WRITE OPERATION — voids a financial document. This is typically irreversible.
-Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
+⚠️ WRITE OPERATION. NOTE: disabled on this installation — see the response for why.`,
     {
       invoiceNumber: z.string().min(1).describe('IVNUM to void'),
       reason: z.string().min(1).describe('Reason for voiding'),
       dryRun: z.boolean().default(true),
     },
-    async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
-      try {
-        const body = { STATDES: 'cancelled', DETAILS: params.reason };
-        if (params.dryRun) return dryRunResult('VOID INVOICE ' + params.invoiceNumber, body);
-
-        const result = await client.update('AINVOICES', params.invoiceNumber, body);
-        return textResult({ voided: true, invoiceNumber: params.invoiceNumber, result });
-      } catch (err) { throw toMcpError(err); }
-    },
+    // Disabled: the old code PATCHed AINVOICES(invoiceNumber) — a single-value key on a
+    // COMPOSITE-keyed form (IVNUM,DEBIT,IVTYPE), which 404s every time — and set STATDES to the
+    // English 'cancelled', which never matches the Hebrew status list. Voiding a posted tax
+    // invoice is a storno (reversing-document) operation with tax/accounting implications, not a
+    // status PATCH, so this is disabled rather than shipped broken.
+    async () =>
+      unavailableHere(
+        'Voiding a tax invoice via the API is not supported here: AINVOICES is composite-keyed (a ' +
+          'single-key PATCH 404s) and cancelling a posted invoice is a storno operation, not a status ' +
+          'change. Disabled to avoid corrupting financial/tax records.',
+        'Cancel the invoice in the Priority invoices screen (which creates the proper storno), or issue ' +
+          'an offsetting credit with priority_create_credit_memo.',
+      ),
   );
 
   server.tool(
     'priority_create_credit_memo',
-    `Issue a credit memo against an existing invoice.
+    `Issue a credit memo (credit invoice / חשבונית מס זיכוי) for a customer.
 
-⚠️ WRITE OPERATION — creates a financial credit document.
-Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
+On this installation a credit is a regular tax invoice (form AINVOICES, sub-form
+AINVOICEITEMS_SUBFORM) with NEGATIVE quantities — verified against live data (credit
+documents appear in AINVOICES with negative amounts). Pass POSITIVE quantities here (the
+amount to credit); the tool emits them as negative. NOTE: 'CINVOICES' on this install is
+"consolidated invoices", NOT credit memos — do not use it for credits.
+
+⚠️ WRITE OPERATION — creates a financial credit document. dryRun=true (default) previews the
+exact body without sending (works even in read-only mode). Real write blocked when
+PRIORITY_READ_ONLY=true.`,
     {
       customerId: z.string().min(1).describe('CUSTNAME'),
-      originalInvoice: z.string().optional().describe('Original IVNUM being credited'),
-      items: z.array(z.object({
-        productId: z.string().min(1),
-        quantity: z.number().positive(),
-        price: z.number().optional(),
-      })).min(1),
+      originalInvoice: z.string().optional().describe('Original IVNUM being credited (sets IVNUM)'),
+      items: z
+        .array(
+          z.object({
+            productId: z.string().min(1).describe('PARTNAME'),
+            quantity: z.number().positive().describe('Quantity to credit (emitted as negative)'),
+            price: z.number().optional(),
+          }),
+        )
+        .min(1),
       remarks: z.string().optional(),
       dryRun: z.boolean().default(true),
     },
     async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
+      const body: Record<string, unknown> = {
+        CUSTNAME: params.customerId,
+        AINVOICEITEMS_SUBFORM: params.items.map((item) => ({
+          PARTNAME: item.productId,
+          TQUANT: -Math.abs(item.quantity), // credit => negative quantity
+          // Unit price goes in PRICE, not the phantom IPRICEDATE (see create_invoice). Getting
+          // this wrong on a credit memo means crediting the customer the wrong amount.
+          ...(item.price !== undefined ? { PRICE: item.price } : {}),
+        })),
+      };
+      if (params.originalInvoice) body.IVNUM = params.originalInvoice;
+      if (params.remarks) body.DETAILS = params.remarks;
+
+      const gate = previewOrBlock(
+        config,
+        params.dryRun,
+        'CREATE CREDIT MEMO (AINVOICES, negative qty)',
+        body,
+      );
+      if (gate) return gate;
       try {
-        const body: Record<string, unknown> = {
-          CUSTNAME: params.customerId,
-          CINVOICITEMS_SUBFORM: params.items.map((item) => ({
-            PARTNAME: item.productId,
-            TQUANT: item.quantity,
-            ...(item.price !== undefined ? { IPRICEDATE: item.price } : {}),
-          })),
-        };
-        if (params.originalInvoice) body.IVNUM = params.originalInvoice;
-        if (params.remarks) body.DETAILS = params.remarks;
-
-        if (params.dryRun) return dryRunResult('CREATE CREDIT MEMO', body);
-
-        const result = await client.create('CINVOICES', body);
-        return textResult({ created: true, creditMemo: result });
-      } catch (err) { throw toMcpError(err); }
+        const outcome = await verifyRecordCreate(client, 'AINVOICES', body);
+        return textResult({ created: outcome.verified, creditMemo: outcome.result, ...outcome });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 }

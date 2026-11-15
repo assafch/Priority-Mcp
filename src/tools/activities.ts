@@ -1,16 +1,33 @@
-import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { ODataBuilder } from '../client/odata-builder.js';
-import { toMcpError } from '../client/errors.js';
-import { sanitizeODataValue } from '../lib/sanitize.js';
-import { checkWriteAllowed, dryRunResult, textResult } from '../lib/write-guard.js';
+import { unavailableHere } from '../lib/write-guard.js';
 
-export function registerActivityTools(server: McpServer, client: PriorityClient, config: Config) {
+/**
+ * CRM activity tools.
+ *
+ * NOTE: these were originally pointed at the `PHONEBOOK` form, but on this installation
+ * `PHONEBOOK` is the **contacts master** (key FIRMA,NAMEA) — it is NOT a CRM activity/task log
+ * and has no per-customer activity rows. No exposed form cleanly represents "activities for a
+ * customer": `GENDIARY` (a personal diary) has no CUSTNAME, and `TODOLIST` is a task list whose
+ * mapping wasn't verified. Rather than write/return data against the wrong form, each tool
+ * returns a clear "not available here" result that names candidate forms to use via the
+ * generic tools (priority_list_forms / priority_query). This needs a follow-up once the right
+ * activity form is identified for this install.
+ */
+const ACTIVITIES_NOTE =
+  'CRM activities are not wired on this installation: PHONEBOOK is the contacts master (not an ' +
+  'activity log), GENDIARY has no CUSTNAME, and TODOLIST is unverified.';
+const ACTIVITIES_SUGGESTION =
+  'Identify the real activity/task form with priority_list_forms (candidates: GENDIARY, TODOLIST, ' +
+  'DOCUMENTS_*), inspect it with priority_describe_form, then read/write it via priority_query / ' +
+  'priority_create_record.';
+
+export function registerActivityTools(server: McpServer, _client: PriorityClient, _config: Config) {
   server.tool(
     'priority_list_activities',
-    `List CRM activities (calls, meetings, tasks) with optional filters.`,
+    'List CRM activities (calls, meetings, tasks) with optional filters.',
     {
       customerId: z.string().optional().describe('Filter by CUSTNAME'),
       type: z.string().optional().describe('Activity type filter'),
@@ -19,17 +36,7 @@ export function registerActivityTools(server: McpServer, client: PriorityClient,
       top: z.number().int().min(1).max(500).default(50),
       skip: z.number().int().min(0).default(0),
     },
-    async (params) => {
-      try {
-        const qb = new ODataBuilder().top(params.top).skip(params.skip).orderBy('CURDATE', 'desc');
-        if (params.customerId) qb.eq('CUSTNAME', sanitizeODataValue(params.customerId));
-        if (params.type) qb.eq('TYPEDES', sanitizeODataValue(params.type));
-        if (params.dateFrom) qb.ge('CURDATE', params.dateFrom);
-        if (params.dateTo) qb.le('CURDATE', params.dateTo);
-        const result = await client.list('PHONEBOOK', qb.build());
-        return textResult({ activities: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
-    },
+    async () => unavailableHere(ACTIVITIES_NOTE, ACTIVITIES_SUGGESTION),
   );
 
   server.tool(
@@ -41,16 +48,7 @@ Returns all CRM activities (calls, emails, meetings, notes) associated with this
       customerId: z.string().min(1).describe('The CUSTNAME'),
       top: z.number().int().min(1).max(500).default(100),
     },
-    async (params) => {
-      try {
-        const qb = new ODataBuilder()
-          .eq('CUSTNAME', params.customerId)
-          .orderBy('CURDATE', 'desc')
-          .top(params.top);
-        const result = await client.list('PHONEBOOK', qb.build());
-        return textResult({ customerId: params.customerId, activities: result.value, count: result.value.length });
-      } catch (err) { throw toMcpError(err); }
-    },
+    async () => unavailableHere(ACTIVITIES_NOTE, ACTIVITIES_SUGGESTION),
   );
 
   server.tool(
@@ -62,17 +60,11 @@ Returns tasks that haven't been completed yet, sorted by due date.`,
       assignee: z.string().optional().describe('Filter by assigned user'),
       top: z.number().int().min(1).max(500).default(50),
     },
-    async (params) => {
-      try {
-        const qb = new ODataBuilder()
-          .eq('CLOSED', 'N')
-          .orderBy('EXPIRYDATE', 'asc')
-          .top(params.top);
-        if (params.assignee) qb.contains('OWNERLOGIN', sanitizeODataValue(params.assignee));
-        const result = await client.list('PHONEBOOK', qb.build());
-        return textResult({ openTasks: result.value, count: result.value.length });
-      } catch (err) { throw toMcpError(err); }
-    },
+    async () =>
+      unavailableHere(
+        ACTIVITIES_NOTE,
+        'TODOLIST is exposed on this install — inspect it with priority_describe_form({ form: "TODOLIST" }) and query via priority_query.',
+      ),
   );
 
   // --- Write Tools ---
@@ -90,24 +82,11 @@ Returns tasks that haven't been completed yet, sorted by due date.`,
       date: z.string().optional().describe('Activity date (ISO 8601) — defaults to today'),
       dryRun: z.boolean().default(true),
     },
-    async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
-      try {
-        const body: Record<string, unknown> = {
-          CUSTNAME: params.customerId,
-          TYPEDES: params.type,
-          SUBJECT: params.subject,
-          CURDATE: params.date ?? new Date().toISOString().split('T')[0],
-        };
-        if (params.details) body.DETAILS = params.details;
-
-        if (params.dryRun) return dryRunResult('CREATE ACTIVITY', body);
-
-        const result = await client.create('PHONEBOOK', body);
-        return textResult({ created: true, activity: result });
-      } catch (err) { throw toMcpError(err); }
-    },
+    async () =>
+      unavailableHere(
+        `${ACTIVITIES_NOTE} Writing to PHONEBOOK would create a CONTACT, not an activity.`,
+        ACTIVITIES_SUGGESTION,
+      ),
   );
 
   server.tool(
@@ -123,24 +102,10 @@ Returns tasks that haven't been completed yet, sorted by due date.`,
       assignTo: z.string().optional().describe('Username to assign the task to'),
       dryRun: z.boolean().default(true),
     },
-    async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
-      try {
-        const body: Record<string, unknown> = {
-          CUSTNAME: params.customerId,
-          SUBJECT: params.subject,
-          EXPIRYDATE: params.dueDate,
-          TYPEDES: 'Task',
-        };
-        if (params.details) body.DETAILS = params.details;
-        if (params.assignTo) body.OWNERLOGIN = params.assignTo;
-
-        if (params.dryRun) return dryRunResult('SCHEDULE FOLLOWUP', body);
-
-        const result = await client.create('PHONEBOOK', body);
-        return textResult({ created: true, task: result });
-      } catch (err) { throw toMcpError(err); }
-    },
+    async () =>
+      unavailableHere(
+        `${ACTIVITIES_NOTE} Writing to PHONEBOOK would create a CONTACT, not a task.`,
+        ACTIVITIES_SUGGESTION,
+      ),
   );
 }

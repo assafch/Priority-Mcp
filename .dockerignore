@@ -6,3 +6,9 @@ dist
 tests
 examples
 docs
+.local-web
+output
+.playwright-cli
+
+artifacts
+.superpowers
