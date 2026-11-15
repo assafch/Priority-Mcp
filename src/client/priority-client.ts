@@ -299,6 +299,22 @@ export class PriorityClient {
     );
   }
 
+  /** DELETE one sub-form row (see resolveSubformRowUrl). Callers check the parent is a draft. */
+  async deleteSubformRow(
+    entity: string,
+    keys: RecordKey,
+    subform: string,
+    subKeys: Record<string, string | number>,
+  ): Promise<void> {
+    this.invalidateCache(entity);
+    await this.send(
+      this.resolveSubformRowUrl(entity, keys, subform, subKeys),
+      'DELETE',
+      undefined,
+      false,
+    );
+  }
+
   /**
    * Parse a request URL back into the form it targeted, so an error can name it (a bare
    * "Not found:" is un-actionable). Returns undefined for the service root and for URLs that
