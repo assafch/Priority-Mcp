@@ -3,10 +3,18 @@ import { z } from 'zod';
 import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
+import {
+  type AttachmentFile,
+  MAX_ATTACHMENT_BYTES,
+  attachmentFromBase64,
+  attachmentFromPath,
+  describeStoredFile,
+  redactAttachmentRow,
+} from '../lib/attachment-file.js';
 import { attachmentSubformOf } from '../lib/forms.js';
 import { resolveRecordKey } from '../lib/record-key.js';
 import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
-import { verifyLineCreate } from '../lib/write-verification.js';
+import { verifyLineCreate, verifyWrite } from '../lib/write-verification.js';
 
 /**
  * Attachments live on a per-form sub-form (navigation property), NOT a global EXTFILES entity
@@ -109,7 +117,7 @@ matters — attachments are scoped to that specific document, not matched by key
           entityKey: key,
           subform,
           subformResolvedBy: source,
-          attachments: result.value,
+          attachments: result.value.map(redactAttachmentRow),
           count: result.value.length,
         });
       } catch (err) {
@@ -189,7 +197,7 @@ so you can locate the file; download it from the Priority UI.`,
           entity: params.entityType,
           entityKey: key,
           subform,
-          attachment: match,
+          attachment: redactAttachmentRow(match),
           downloadUrl: null,
           note: 'Priority OData does not expose a download URL — EXTFILENAME is a server-side path inside the document store. Open the document in the Priority UI to download the file.',
         });
@@ -203,58 +211,64 @@ so you can locate the file; download it from the Priority UI.`,
 
   server.tool(
     'priority_upload_attachment',
-    `צירוף מסמך לרשומה. Attach a file to a Priority document (invoice, order, import file, part…).
+    `צירוף מסמך לרשומה. Attach a file to a Priority document (supplier invoice, import file, order…).
 
-HOW ATTACHMENTS WORK HERE — read before using. Priority stores the FILE in its own document store
-and the OData API records a ROW pointing at it: EXTFILENAME is the file's PATH ("נתיב הקובץ",
-mandatory) and EXTFILEDES is its display name ("שם קובץ", mandatory, ≤32 chars). This API carries
-no file bytes — the model declares no media/stream entity (verified: 0 entity types with HasStream)
-— so pass 'filePath', a location Priority's server can already reach (a UNC/share path, a path
-inside the document store, or a URL). Passing base64 'fileContent' is rejected with that explanation
-rather than silently creating a broken row.
+THREE WAYS to give the file — exactly one:
+  • localPath — absolute path of a file ON THE MACHINE THIS SERVER RUNS ON (where a bot saved the
+    PDF). The server reads it and sends the bytes to Priority. Preferred: nothing large passes
+    through the tool call.
+  • fileContent — the file as base64 (or a data URI) plus 'fileName'. For small files only; long
+    base64 is easily cut off in transit, and a cut-off file is rejected.
+  • filePath — a location Priority's own server can already reach (share path / URL). Stores a
+    pointer only; no bytes are sent.
 
-The attachments sub-form is DISCOVERED at runtime from the parent form's metadata (EXTFILES_SUBFORM
-on most forms, PARTEXTFILE_SUBFORM on LOGPART); a form that exposes none is reported as such,
-naming the sub-forms it does have. Verified live 2026-07-29: IMPFILES exposes EXTFILES_SUBFORM.
+How it works: Priority's OData service keeps an attachment's bytes inside the row — EXTFILENAME
+holds a data URI (data:application/pdf;base64,…). The tool builds that from the file. Limit
+${MAX_ATTACHMENT_BYTES / 1024 / 1024} MB; pdf, jpg, png, tif, xlsx, docx, msg, eml, txt, csv, xml; a .pdf must really be a PDF.
+EXTFILEDES is the display name (≤32 chars; defaults to the file name).
 
-After a real write the tool RE-READS the sub-form and returns the created row, so you can see
-exactly what Priority stored (including the EXTFILENUM it assigned).
+For a composite-keyed parent pass 'keys', e.g. PINVOICES { IVNUM:'T123', DEBIT:'D', IVTYPE:'P' }.
+The attachments sub-form is discovered from the parent form (EXTFILES_SUBFORM on most forms).
 
-⚠️ A stored row does not prove the path is accessible or the file bytes exist. Check the file in
-the Priority UI; FILESIZE alone is not conclusive evidence of path accessibility.
+After a real write the tool reads the new row back and compares the SHA-256 of what Priority
+stored with the file that was sent: 'attached' is true only when the bytes match
+(fileContentVerified). A filePath pointer can only be verified as a row. The file itself is never
+echoed in previews or results — only its size and hash.
 
-⚠️ WRITE. dryRun=true (default) previews the exact POST endpoint + body; nothing is sent.`,
+⚠️ WRITE. dryRun=true (default) previews the endpoint, name, size and hash; nothing is sent.`,
     {
-      entityType: z.string().min(1).describe('Parent form type (e.g. "IMPFILES", "PORDERS")'),
+      entityType: z.string().min(1).describe('Parent form type (e.g. "PINVOICES", "IMPFILES")'),
       entityKey: z.string().min(1).optional().describe('Parent record key (e.g. the IMPFNUM)'),
       keys: z
         .record(z.string(), z.union([z.string(), z.number().finite()]))
         .optional()
         .describe('Named parent key fields; exactly one of entityKey or keys'),
+      localPath: z
+        .string()
+        .optional()
+        .describe('Absolute path of the file on the machine running this server (preferred)'),
+      fileContent: z
+        .string()
+        .optional()
+        .describe('The file as base64 or a data URI (small files); requires fileName'),
+      fileName: z
+        .string()
+        .optional()
+        .describe('File name with extension, for fileContent (e.g. "invoice-1234.pdf")'),
       filePath: z
         .string()
         .optional()
-        .describe(
-          'Path/URL to the file, reachable by the Priority server → EXTFILENAME (mandatory in Priority)',
-        ),
+        .describe("Pointer only: a path/URL Priority's server can already reach → EXTFILENAME"),
       description: z
         .string()
         .optional()
         .describe('Display name → EXTFILEDES (mandatory in Priority, max 32 chars)'),
-      suffix: z
-        .string()
-        .optional()
-        .describe('File extension → SUFFIX (derived from filePath when omitted)'),
+      suffix: z.string().optional().describe('File extension → SUFFIX (derived when omitted)'),
       subform: z
         .string()
         .optional()
         .describe('Override the attachments sub-form name (normally auto-detected)'),
-      fileName: z.string().optional().describe('Deprecated alias for filePath'),
       fileUrl: z.string().optional().describe('Deprecated alias for filePath'),
-      fileContent: z
-        .string()
-        .optional()
-        .describe('NOT SUPPORTED — this API stores a path, not bytes (see the tool description)'),
       dryRun: z.boolean().default(true),
     },
     async (params) => {
@@ -264,19 +278,31 @@ the Priority UI; FILESIZE alone is not conclusive evidence of path accessibility
           params.entityType,
           params.entityKey,
           params.keys,
-          'dryRun' in params && params.dryRun === true,
+          params.dryRun === true,
         );
-        const path = params.filePath ?? params.fileUrl ?? params.fileName;
-        if (params.fileContent) {
-          return unavailableHere(
-            'Binary upload is not part of this Priority OData API: the service declares no media/stream entity, and EXTFILES.EXTFILENAME is a PATH into Priority\'s document store ("נתיב הקובץ"), not file content. Creating the row from base64 would record an attachment whose file does not exist.',
-            'Put the file somewhere the Priority server can read (document store / share / URL) and pass that location as filePath. To attach bytes directly, use the Priority UI or the Priority Web SDK file-upload endpoint, neither of which is OData.',
-          );
-        }
-        if (!path) {
+        // fileName used to be an alias for filePath; it still is when no content comes with it.
+        const pointer =
+          params.filePath ?? params.fileUrl ?? (params.fileContent ? undefined : params.fileName);
+        const given = [params.localPath, params.fileContent, pointer].filter(
+          (v) => v !== undefined && v !== '',
+        ).length;
+        if (given !== 1) {
           return textResult({
             error:
-              'filePath is required — it becomes EXTFILENAME (נתיב הקובץ), which Priority marks mandatory.',
+              "Give the file exactly one way: localPath (a file on this server's machine), fileContent + fileName (base64), or filePath (a location Priority's server can reach).",
+          });
+        }
+        let file: AttachmentFile | undefined;
+        try {
+          if (params.localPath) file = await attachmentFromPath(params.localPath, params.suffix);
+          else if (params.fileContent) {
+            if (!params.fileName)
+              return textResult({ error: 'fileContent requires fileName (with its extension).' });
+            file = attachmentFromBase64(params.fileContent, params.fileName, params.suffix);
+          }
+        } catch (error) {
+          return textResult({
+            error: `The file cannot be attached: ${error instanceof Error ? error.message : String(error)}`,
           });
         }
 
@@ -293,6 +319,91 @@ the Priority UI; FILESIZE alone is not conclusive evidence of path accessibility
               : 'Confirm the form name with priority_list_forms and inspect it with priority_get_entity_metadata.',
           );
         }
+        const endpoint = client.resolveSubformUrl(params.entityType, key, subform);
+
+        if (file) {
+          const description = (params.description ?? file.name).slice(0, 32);
+          const body = {
+            [EXTFILES_FIELDS.path]: file.dataUri,
+            [EXTFILES_FIELDS.description]: description,
+            [EXTFILES_FIELDS.suffix]: file.suffix,
+          };
+          const fileInfo = {
+            name: file.name,
+            mime: file.mime,
+            bytes: file.bytes,
+            sha256: file.sha256,
+          };
+          const gate = previewOrBlock(
+            config,
+            params.dryRun,
+            `ATTACH FILE TO ${params.entityType} ${JSON.stringify(key)}`,
+            {
+              method: 'POST',
+              endpoint,
+              subform,
+              subformResolvedBy: source,
+              body: {
+                ...body,
+                [EXTFILES_FIELDS.path]: `data:${file.mime};base64,[${file.bytes} bytes, not shown]`,
+              },
+              file: fileInfo,
+            },
+          );
+          if (gate) return gate;
+
+          const expected = { EXTFILEDES: description, sha256: file.sha256, bytes: file.bytes };
+          const outcome = await verifyWrite(
+            () => client.addLine<Record<string, unknown>>(params.entityType, key, subform, body),
+            async (result) => {
+              const id = (result as Record<string, unknown> | undefined)?.EXTFILENUM;
+              if (typeof id !== 'number' && typeof id !== 'string')
+                throw new Error(
+                  'POST returned no EXTFILENUM; list the attachments before retrying.',
+                );
+              const row = await client.getSubformRow<Record<string, unknown>>(
+                params.entityType,
+                key,
+                subform,
+                { EXTFILENUM: id },
+                undefined,
+                { cache: false },
+              );
+              const stored = describeStoredFile(row.EXTFILENAME);
+              return {
+                EXTFILENUM: row.EXTFILENUM,
+                EXTFILEDES: row.EXTFILEDES,
+                SUFFIX: row.SUFFIX,
+                FILESIZE: row.FILESIZE,
+                CURDATE: row.CURDATE,
+                storedAs: stored.kind,
+                sha256: stored.sha256,
+                bytes: stored.bytes,
+              };
+            },
+            expected,
+          );
+          // The POST response repeats the whole file; keep only its identity.
+          const created = outcome.result as Record<string, unknown> | undefined;
+          const result = textResult({
+            attached: outcome.verified,
+            fileContentVerified: outcome.verified,
+            entity: params.entityType,
+            entityKey: key,
+            subform,
+            file: fileInfo,
+            ...outcome,
+            result: created ? { EXTFILENUM: created.EXTFILENUM } : undefined,
+            storedRow: outcome.verification.observed ?? null,
+            note: outcome.verified
+              ? 'Priority stored the file; the bytes read back match the file that was sent.'
+              : "Not verified. Do not attach again before listing the document's attachments (priority_list_attachments) — a row may already exist.",
+          });
+          return outcome.verified ? result : { ...result, isError: true as const };
+        }
+
+        // Pointer-only row: a location Priority's server can already reach.
+        const path = pointer as string;
         // EXTFILEDES is mandatory and capped at 32 chars — derive a sane one from the path rather
         // than letting Priority reject the row for a missing/oversized display name.
         const baseName = path.split(/[\\/]/).pop() ?? path;
@@ -303,7 +414,6 @@ the Priority UI; FILESIZE alone is not conclusive evidence of path accessibility
           [EXTFILES_FIELDS.description]: description,
           ...(suffix ? { [EXTFILES_FIELDS.suffix]: suffix } : {}),
         };
-        const endpoint = client.resolveSubformUrl(params.entityType, key, subform);
 
         const gate = previewOrBlock(
           config,
@@ -323,7 +433,7 @@ the Priority UI; FILESIZE alone is not conclusive evidence of path accessibility
           created: outcome.result,
           storedRow: outcome.verification.observed ?? null,
           fileContentVerified: false,
-          note: 'Readback verifies the attachment row only; file bytes and server path accessibility need separate evidence.',
+          note: 'Pointer only: the readback verifies the attachment row, not that Priority can open the path. To send the file itself use localPath or fileContent.',
         });
       } catch (err) {
         throw toMcpError(err);
