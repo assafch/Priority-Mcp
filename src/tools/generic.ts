@@ -8,6 +8,12 @@ import { filterForms, listExposedForms } from '../lib/forms.js';
 import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { resolveRecordKey } from '../lib/record-key.js';
 import { knowledgeFor } from '../lib/schema-service.js';
+import {
+  checkDraft,
+  deleteRowVerified,
+  resolveSubformRowKeys,
+  rowSelectFor,
+} from '../lib/subform-rows.js';
 import { checkWriteAllowed, dryRunRequest, textResult } from '../lib/write-guard.js';
 import {
   verifyLineCreate,
@@ -429,8 +435,9 @@ Set confirm=true to actually add the line (also blocked when PRIORITY_READ_ONLY=
         const guard = checkWriteAllowed(config);
         if (guard.blocked) return guard.result;
         await resolveRecordKey(client, params.form, params.key, params.keys);
-        // Validate row key fields against the sub-form's metadata before a real write.
-        await resolveRecordKey(client, params.subform, undefined, params.lineKeys);
+        // Validate row key fields against the sub-form's ROW TYPE (declared on the parent). The
+        // sub-form name itself is not an entity: asking for its metadata answers HTTP 500.
+        await resolveSubformRowKeys(client, params.form, params.subform, params.lineKeys);
         const outcome = await verifyWrite(
           () =>
             client.updateSubformRow(params.form, key, params.subform, params.lineKeys, params.data),
@@ -448,6 +455,110 @@ Set confirm=true to actually add the line (also blocked when PRIORITY_READ_ONLY=
           lineKeys: params.lineKeys,
           ...outcome,
         });
+      } catch (err) {
+        throw toMcpError(err);
+      }
+    },
+  );
+  server.tool(
+    'priority_delete_line',
+    `מחיקת שורה אחת מתת-מסך של מסמך טיוטא. DELETE one identified sub-form row (an invoice line, an
+order line, an attachment row) from a DRAFT document. Same addressing as priority_update_line:
+exactly one of key/keys identifies the parent, lineKeys identifies the row (read the row's key
+from the document first — line numbers do not always start at 1).
+
+Refused on anything that is not provably a draft: FINAL=Y, a journal entry (FNCNUM), a cancelled
+or closed document, or a form without FINAL whose status is not טיוטא. The parent and the row are
+re-read live before anything is sent.
+
+confirm=false (default) is a preview: it shows the row that would be deleted and the draft check,
+and sends nothing. confirm=true deletes that one row, then re-reads the sub-form: success means
+the row is gone and the row count dropped by exactly one. Never retried.`,
+    {
+      form: z.string().min(1),
+      key: z.string().min(1).optional(),
+      keys: z.record(z.string(), z.union([z.string(), z.number().finite()])).optional(),
+      subform: z.string().min(1),
+      lineKeys: z.record(z.string(), z.union([z.string(), z.number().finite()])),
+      confirm: z.boolean().default(false),
+    },
+    async (params) => {
+      try {
+        const key = await resolveRecordKey(client, params.form, params.key, params.keys);
+        const { keyFields } = await resolveSubformRowKeys(
+          client,
+          params.form,
+          params.subform,
+          params.lineKeys,
+        );
+        const endpoint = client.resolveSubformRowUrl(
+          params.form,
+          key,
+          params.subform,
+          params.lineKeys,
+        );
+        const parent = await client.get<Record<string, unknown>>(params.form, key, undefined, {
+          cache: false,
+        });
+        const draft = checkDraft(parent);
+        if (!draft.draft) {
+          return {
+            ...textResult({
+              status: 'refused',
+              acknowledged: false,
+              verified: false,
+              verification: { reason: 'The document is not a draft; nothing was sent.' },
+              error: `Refused: ${draft.reason} Rows are deleted only from draft documents.`,
+              form: params.form,
+              key,
+              documentState: draft.state,
+            }),
+            isError: true as const,
+          };
+        }
+        const row = await client.getSubformRow<Record<string, unknown>>(
+          params.form,
+          key,
+          params.subform,
+          params.lineKeys,
+          rowSelectFor(params.subform),
+          { cache: false },
+        );
+        if (!params.confirm) {
+          return textResult({
+            dryRun: true,
+            status: 'preview',
+            acknowledged: false,
+            verified: false,
+            verification: { reason: 'Preview only; no delete was attempted.' },
+            wouldSend: { method: 'DELETE', endpoint },
+            rowToDelete: row,
+            documentState: draft.state,
+            draftCheck: draft.reason,
+            keyFields,
+            note: 'Nothing was sent. Re-run with confirm=true to delete this one row.',
+          });
+        }
+        const guard = checkWriteAllowed(config);
+        if (guard.blocked) return guard.result;
+        const outcome = await deleteRowVerified(
+          client,
+          params.form,
+          key,
+          params.subform,
+          params.lineKeys,
+          keyFields,
+        );
+        const result = textResult({
+          deleted: outcome.verified,
+          form: params.form,
+          key,
+          subform: params.subform,
+          lineKeys: params.lineKeys,
+          deletedRow: row,
+          ...outcome,
+        });
+        return outcome.verified ? result : { ...result, isError: true as const };
       } catch (err) {
         throw toMcpError(err);
       }

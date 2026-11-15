@@ -65,6 +65,12 @@ export interface WebSdkForm {
   ): Promise<WebSdkProcStep>;
   activateEnd(): Promise<unknown>;
   endCurrentForm(): Promise<unknown>;
+  /** Open a sub-form of the active row (read paths only use getRows on it). */
+  startSubForm?(
+    formName: string,
+    onMessage: (message: WebSdkServerMessage) => void,
+    onUpdate: null,
+  ): Promise<WebSdkForm>;
   warningConfirm?(ok: 0 | 1): void;
   infoMsgConfirm?(): void;
 }
@@ -78,13 +84,62 @@ export interface WebSdkModule {
     profile: { company: string },
     autoRetrieve: number,
   ): Promise<WebSdkForm>;
+  /**
+   * Start a procedure by its internal name (type 'P'). Optional so callers that only open forms
+   * (the close-invoice fake included) still satisfy this interface. `loadWebSdk` requires it.
+   */
+  procStart?(
+    name: string,
+    type: string,
+    progress: ((...args: unknown[]) => void) | null,
+    company?: string,
+  ): Promise<WebSdkProcStep>;
 }
 
 /** Lazy CommonJS load; throws a clear message when the dependency is missing. */
+/**
+ * Cookies the SDK sets after login (PriUser, Environment, PriUserV2). In a browser they go to
+ * document.cookie; under Node the SDK writes them to a private `{}` that nothing can read. The
+ * netfiles URLs a print procedure returns need PriUserV2, so loadWebSdk hands the SDK a temporary
+ * `window` whose document records cookie writes here. The SDK reads `window` only while loading.
+ */
+const sdkCookies = new Map<string, string>();
+
+function cookieRecordingDocument(): object {
+  const doc = {};
+  Object.defineProperty(doc, 'cookie', {
+    get: () => [...sdkCookies].map(([name, value]) => `${name}=${value}`).join('; '),
+    set: (raw: unknown) => {
+      const pair = String(raw).split(';')[0];
+      const eq = pair.indexOf('=');
+      if (eq > 0) sdkCookies.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+    },
+  });
+  return doc;
+}
+
+/** The SDK session's web cookie (PriUserV2 by default), or undefined before login. */
+export function webSdkCookie(name = 'PriUserV2'): string | undefined {
+  const value = sdkCookies.get(name);
+  return value ? value : undefined;
+}
+
 export function loadWebSdk(): WebSdkModule {
   const require = createRequire(import.meta.url);
   let mod: { default?: WebSdkModule } & Partial<WebSdkModule>;
+  const g = globalThis as { window?: unknown };
+  const hadWindow = 'window' in g;
   try {
+    if (!hadWindow) {
+      g.window = {
+        document: cookieRecordingDocument(),
+        setTimeout,
+        clearTimeout,
+        setInterval,
+        clearInterval,
+        Array,
+      };
+    }
     mod = require('priority-web-sdk');
   } catch (err) {
     throw new Error(
@@ -92,10 +147,16 @@ export function loadWebSdk(): WebSdkModule {
         err instanceof Error ? err.message : String(err)
       }`,
     );
+  } finally {
+    if (!hadWindow) Reflect.deleteProperty(g, 'window');
   }
   const sdk = (mod.default ?? mod) as WebSdkModule;
-  if (typeof sdk.login !== 'function' || typeof sdk.formStart !== 'function') {
-    throw new Error('priority-web-sdk loaded but login/formStart are missing');
+  if (
+    typeof sdk.login !== 'function' ||
+    typeof sdk.formStart !== 'function' ||
+    typeof sdk.procStart !== 'function'
+  ) {
+    throw new Error('priority-web-sdk loaded but login/formStart/procStart are missing');
   }
   return sdk;
 }

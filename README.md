@@ -219,9 +219,51 @@ Identical concurrent cacheable reads share one request. A bounded process-local 
 
 Read [performance and rollout](docs/performance-rollout.md) for limits, measurements, opt-in profile, private aliases, rollback and the separately authorized live pilot. Local offline verification does not establish live ERP speed or model quality.
 
-## Tools (110)
+## Tools (114)
 
-The **unreleased faster/smarter update** retains all 105 legacy tools and adds resolver, typed query preparation and three read workflows (110 total). The legacy 0.2.0 inventory includes: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, and `priority_update_line`. Generic document operations now accept validated composite keys.
+The **unreleased faster/smarter update** retains all 105 legacy tools and adds resolver, typed query preparation, three read workflows, and `priority_close_invoice`. `priority_print_document` brings the catalog to 112; `priority_customer_ledger` and `priority_delete_line` make it 114. The legacy 0.2.0 inventory includes: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, `priority_update_line`, and `priority_print_document`. Generic document operations now accept validated composite keys.
+
+### Official print (1)
+
+| Tool | Type | Description |
+|:-----|:----:|:------------|
+| `priority_print_document` | Read | Official Priority print layout as PDF (Web SDK document procedure, display mode). Not an OData reconstruction. |
+
+`priority_print_document({ form, key, format?, listFormats? })` runs the same document program as Print in the Priority UI, through the Web SDK already used by `priority_close_invoice`:
+
+| Form | Procedure | Key | Example |
+|:-----|:----------|:----|:--------|
+| `ORDERS` | `WWWSHOWORDER` | `ORDNAME` | `SO26000419` |
+| `AINVOICES` | `WWWSHOWAIV` | `IVNUM` | `IN264000407`, draft `T16631` |
+| `EINVOICES` | `WWWSHOWEIV` | `IVNUM` | `OV265000552` |
+| `CINVOICES` | `WWWSHOWCIV` | `IVNUM` | legacy credit-invoice form |
+| `TINVOICES` | `WWWSHOWTIV` | `IVNUM` | receipt (קבלה) |
+| `DOCUMENTS_D` / `OPENINVOICES` | `WWWSHOWDOC` | `DOCNO` | delivery note; on this tenant open delivery notes are listed in `OPENINVOICES` |
+
+The procedure is always continued with `documentOptions` **pdf: 1** and **mode: `display`**. That is the on-screen original layout. It does not email the customer, does not open Click2Sign, and does not request the send-option that sets the Printed flag (מקור). Invoices and delivery notes therefore show as copy (העתק). Drafts are printed as drafts: the tool never calls `CLOSEANINVOICE` and never writes `FINAL`. `PRIORITY_READ_ONLY` does not block it.
+
+`listFormats: true` returns the format ids and titles and cancels before a file is downloaded. Omit `format` to use the system format Priority marks as selected. A warning is cancelled unless its exact text is passed in `acceptMessages`; errors and any message about sending, closing, or finalizing are never accepted.
+
+The result carries `contentBase64`, `filename`, and `mimeType: application/pdf` so a remote MCP client can use the file. `pdfSource` is `priority` when Priority itself returned a PDF. If Priority returns HTML, the server prints that HTML with headless Chrome (`pdfSource: html-converted`); set `PRIORITY_CHROME_PATH` when Chrome is not on `PATH`. Optional `PRIORITY_PRINT_DIR` also writes the file locally. Inline base64 is capped by `PRIORITY_PRINT_MAX_BYTES` (default 6 MB).
+
+Verify on a machine that can reach the tenant (this repo's CI cannot):
+
+```bash
+cd ~/Projects/ORGAT/priority-mcp/priority-mcp-server
+git fetch origin
+git checkout cursor/priority-print-document-c63d   # or merge the PR
+npm install
+npm test
+npm run build
+# Restart the MCP process that Cursor launches (node dist/index.js, or the stdio
+# entry in Cursor Settings → MCP). Then, from the assistant:
+#   priority_print_document({ form: "ORDERS", key: "SO26000419", listFormats: true })
+#   priority_print_document({ form: "ORDERS", key: "SO26000419" })
+#   priority_print_document({ form: "AINVOICES", key: "IN264000407" })
+#   priority_print_document({ form: "AINVOICES", key: "T16631" })   # draft, not finalized
+```
+
+A missing Web SDK (`priority-web-sdk` not installed, or no `PRIORITY_PAT` / username+password) and a missing document are errors. The procedure is not started when OData does not find exactly one row.
 
 
 ### Generic / Building Blocks (9)
@@ -240,6 +282,7 @@ names with the discovery tools *before* querying or writing.
 | `priority_create_record` | Write | POST a record; supports **deep-insert** (header + sub-form line arrays in one call) |
 | `priority_update_record` | Write | PATCH fields on an existing record |
 | `priority_add_line` | Write | POST a single line to a record's sub-form (navigation property) |
+| `priority_delete_line` | Write | DELETE one identified sub-form row from a draft document — preview by default, refused on final documents, verified by re-read |
 
 The three write tools take **`confirm`** (default **`false`**). With `confirm:false` they return a
 DRY-RUN preview of the exact HTTP method, endpoint URL, and JSON body — **nothing is sent**. Set
@@ -371,7 +414,7 @@ Hebrew and spaces are fine inside quotes (values are percent-encoded automatical
 |:-----|:----:|:------------|
 | `priority_list_attachments` | Read | Attachments for any entity |
 | `priority_get_attachment_url` | Read | Stored path/metadata for one attachment (this API exposes no download URL) |
-| `priority_upload_attachment` | Write | Attach a file to a document — POSTs to the parent's attachments sub-form (auto-detected), then verifies by re-read |
+| `priority_upload_attachment` | Write | Attach a file to a document — a local file (`localPath`) or base64 is sent as a data URI in `EXTFILENAME`; verified by re-reading the stored bytes (SHA-256) |
 
 ### Meta / Admin (7)
 
@@ -396,7 +439,7 @@ against purchase orders, run pre-close diagnostics, and estimate landed cost. Se
 | `impfile_get` | Read | Full snapshot — aggregates all 7 sub-forms (invoices, costs, customs estimate, goods, PO lines) |
 | `impfile_open` | Write | Open a new import file (POST IMPFILES) |
 | `impfile_update` | Write | Update file header / status (PATCH IMPFILES) |
-| `pinvoice_create` | Write | Record a supplier invoice — **goods** or **broker** mode (the `מע'מ` VAT-from-declaration line, cost parts, customs) |
+| `pinvoice_create` | Write | Record a supplier invoice — **goods** or **broker** mode (the `מע'מ` VAT-from-declaration line, cost parts, customs). Goods + `po`: header only, then the lines Priority pulls from the order are reconciled and read back |
 | `impfile_link_invoice` | Write | Link an invoice to a file — `header` (PINVOICES), `line` (IMPFILEIV/IMPFILEIVS_SUBFORM per KLINE) or `final` (PIVDETAILS); storno / relink guards |
 | `impfile_manual_alloc` | Write | Add a manual cost/product allocation line (coded-not-observed on this company) |
 | `impfile_expected_costs` | Write | Record expected costs (feeds the expected/actual report) |
