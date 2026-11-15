@@ -1,6 +1,6 @@
 {
   "name": "priority-mcp-server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server for Priority ERP OData API",
   "type": "module",
   "license": "MIT",
@@ -9,37 +9,53 @@
     "type": "git",
     "url": "https://github.com/anthropic-community/priority-mcp-server"
   },
-  "keywords": ["mcp", "priority", "erp", "odata", "claude"],
+  "keywords": [
+    "mcp",
+    "priority",
+    "erp",
+    "odata",
+    "claude"
+  ],
   "engines": {
-    "node": ">=22.0.0"
+    "node": ">=22.13.0"
   },
   "bin": {
     "priority-mcp-server": "./dist/index.js"
   },
   "main": "./dist/index.js",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "node --experimental-strip-types src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "web:setup": "npm run build && node dist/web/setup.js",
+    "web:start": "node dist/web/index.js",
+    "test:web": "vitest run tests/web",
+    "test:mcp": "npm run build && node scripts/smoke.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "biome check .",
     "lint:fix": "biome check --fix .",
-    "inspect": "npx @modelcontextprotocol/inspector node --experimental-strip-types src/index.ts"
+    "inspect": "npx @modelcontextprotocol/inspector node --experimental-strip-types src/index.ts",
+    "benchmark:mcp": "npm run build && node scripts/benchmark-mcp.mjs",
+    "evaluate:mcp": "npm run build && node scripts/evaluate-mcp.mjs",
+    "profile:readonly": "npm run build && node scripts/profile-readonly.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.0",
-    "@hono/node-server": "^1.13.0",
-    "hono": "^4.7.0",
+    "@hono/node-server": "^2.1.8",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "hono": "^4.13.18",
     "pino": "^9.6.0",
-    "undici": "^7.5.0",
-    "zod": "^3.24.0"
+    "priority-web-sdk": "^3.0.39",
+    "undici": "^7.30.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^22.20.5",
     "typescript": "^5.7.0",
-    "vitest": "^3.1.0"
+    "vitest": "^4.1.12"
   }
 }

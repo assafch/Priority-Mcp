@@ -1,18 +1,48 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Config } from './config.js';
-import type { Logger } from './logger.js';
 import { PriorityClient } from './client/priority-client.js';
-import { registerAllTools } from './tools/index.js';
-import { registerAllResources } from './resources/index.js';
+import type { Config } from './config.js';
+import { packageVersion } from './lib/connection-info.js';
+import type { Logger } from './logger.js';
 import { registerAllPrompts } from './prompts/index.js';
+import { registerAllResources } from './resources/index.js';
+import { registerAllTools } from './tools/index.js';
 
-export function createServer(config: Config, logger: Logger): McpServer {
+export function createServer(
+  config: Config,
+  logger: Logger,
+  sharedClient?: PriorityClient,
+): McpServer {
   const server = new McpServer({
     name: 'priority-mcp-server',
-    version: '0.1.0',
+    version: packageVersion,
   });
 
-  const client = new PriorityClient(config, logger);
+  const client = sharedClient ?? new PriorityClient(config, logger);
+  if (!sharedClient) {
+    // The stdio/server owner owns its client; HTTP session servers borrow their listener's.
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      client.close();
+    };
+    const close = server.close.bind(server);
+    server.close = async () => {
+      try {
+        await close();
+      } finally {
+        release();
+      }
+    };
+    const onclose = server.server.onclose;
+    server.server.onclose = () => {
+      try {
+        onclose?.();
+      } finally {
+        release();
+      }
+    };
+  }
 
   registerAllTools(server, client, config);
   registerAllResources(server, client, config);

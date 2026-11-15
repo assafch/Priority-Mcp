@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "name": "priority-synthetic-offline-v1",
+  "shortPageSearch": { "rows": 300, "pageSize": 100, "matchIndex": 250 },
+  "formatter": { "minimumInputBytes": 1048576, "rows": 2048, "descriptionChars": 512 },
+  "report": { "amounts": [125.5, 20, -5.5], "expectedTotal": 140 },
+  "samples": 50
+}

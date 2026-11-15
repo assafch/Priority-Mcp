@@ -1,0 +1,36 @@
+{
+  "records": [
+    {"CUSTNAME":"H01","CUSTDES":"שקד תעשיות"},
+    {"CUSTNAME":"H02","CUSTDES":"אלון ציוד לבית"},
+    {"CUSTNAME":"H03","CUSTDES":"מגדל מוצרי ניקיון"},
+    {"CUSTNAME":"H04","CUSTDES":"ניצן פתרונות אריזה"},
+    {"CUSTNAME":"H05","CUSTDES":"Green Valley Supplies"},
+    {"CUSTNAME":"H06","CUSTDES":"Silver Lake Trading"},
+    {"CUSTNAME":"H07","CUSTDES":"North Harbor Market"},
+    {"CUSTNAME":"H08","CUSTDES":"Golden Bridge Goods"},
+    {"CUSTNAME":"H09","CUSTDES":"Cedar Grove Wholesale"},
+    {"CUSTNAME":"H10","CUSTDES":"Maple Leaf Partners"}
+  ],
+  "queries": [
+    {"query":"שָׁקֵד  תעשיות","expected":"H01"},
+    {"query":"אלון ציוד לביית","expected":"H02"},
+    {"query":"מגדל   מוצרי ניקיון","expected":"H03"},
+    {"query":"ניצן פתרונות אריזא","expected":"H04"},
+    {"query":"green valley supplies","expected":"H05"},
+    {"query":"SILVER  LAKE trading","expected":"H06"},
+    {"query":"North Harbur Market","expected":"H07"},
+    {"query":"Golden Bridge Good","expected":"H08"},
+    {"query":"Cedar Grove Wholesal","expected":"H09"},
+    {"query":"Maple Leaf Partner","expected":"H10"},
+    {"query":"שקד תעשיות","expected":"H01"},
+    {"query":"אלון  ציוד לבית","expected":"H02"},
+    {"query":"מגדל מוצרי נקיון","expected":"H03"},
+    {"query":"נִיצָן פתרונות אריזה","expected":"H04"},
+    {"query":"Green Valey Supplies","expected":"H05"},
+    {"query":"Silver Lake Tradng","expected":"H06"},
+    {"query":"North Harbor Marke","expected":"H07"},
+    {"query":"golden bridge goods","expected":"H08"},
+    {"query":"Cedar  Grove Wholesale","expected":"H09"},
+    {"query":"Maple Leaf Partnrs","expected":"H10"}
+  ]
+}

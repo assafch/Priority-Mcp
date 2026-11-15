@@ -1,11 +1,20 @@
-import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { z } from 'zod';
+import { toMcpError } from '../client/errors.js';
+import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
-import { ODataBuilder } from '../client/odata-builder.js';
-import { toMcpError } from '../client/errors.js';
+import { toolAllowed } from '../lib/capabilities.js';
+import { dateRange } from '../lib/dates.js';
+import { getSchema } from '../lib/priority-schema.js';
 import { sanitizeODataValue } from '../lib/sanitize.js';
-import { checkWriteAllowed, dryRunResult, textResult } from '../lib/write-guard.js';
+import { previewOrBlock, textResult, unavailableHere } from '../lib/write-guard.js';
+import { verifyRecordCreate, verifyRecordUpdate } from '../lib/write-verification.js';
+import { createOperation, currentOperation } from '../runtime/operation-context.js';
+import { orderDiagnosis } from '../services/order-diagnosis.js';
+import { evidence } from '../services/read-policy.js';
+
+const ORDERS = getSchema('ORDERS');
 
 export function registerOrderTools(server: McpServer, client: PriorityClient, config: Config) {
   server.tool(
@@ -26,14 +35,28 @@ Use priority_get_order for full details with line items.`,
     },
     async (params) => {
       try {
-        const qb = new ODataBuilder().top(params.top).skip(params.skip).orderBy(params.orderBy, params.orderDir);
+        const qb = new ODataBuilder()
+          .top(params.top)
+          .skip(params.skip)
+          .orderBy(params.orderBy, params.orderDir);
         if (params.customerId) qb.eq('CUSTNAME', sanitizeODataValue(params.customerId));
-        if (params.status) qb.eq('STATDES', sanitizeODataValue(params.status));
-        if (params.dateFrom) qb.ge('CURDATE', params.dateFrom);
-        if (params.dateTo) qb.le('CURDATE', params.dateTo);
+        // Order status field on this install is ORDSTATUSDES (not STATDES).
+        if (params.status) qb.eq('ORDSTATUSDES', sanitizeODataValue(params.status));
+        const range = dateRange(params.dateFrom, params.dateTo);
+        if (range.from) qb.ge('CURDATE', range.from);
+        if (range.to) {
+          if (range.upperOperator === 'lt') qb.lt('CURDATE', range.to);
+          else qb.le('CURDATE', range.to);
+        }
+        if (ORDERS?.defaultSelect) qb.select(...ORDERS.defaultSelect);
         const result = await client.list('ORDERS', qb.build());
-        return textResult({ orders: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+        return textResult({
+          orders: result.value,
+          pagination: { returned: result.value.length, top: params.top, skip: params.skip },
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -52,7 +75,9 @@ Use ORDNAME (order number) as the key. Expands line items by default.`,
         const qb = new ODataBuilder().expand(...expands);
         const order = await client.get('ORDERS', params.orderNumber, qb.build());
         return textResult(order);
-      } catch (err) { throw toMcpError(err); }
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -67,30 +92,78 @@ Useful for warehouse/fulfillment teams to see what needs to go out.`,
     },
     async (params) => {
       try {
+        // Closed flag on ORDERS is BOOLCLOSED (Y/blank); pending = not closed.
         const qb = new ODataBuilder()
-          .eq('CLOSED', 'N')
-          .top(params.top).skip(params.skip)
+          .filter("BOOLCLOSED ne 'Y'")
+          .top(params.top)
+          .skip(params.skip)
           .orderBy('CURDATE', 'asc');
+        if (ORDERS?.defaultSelect) qb.select(...ORDERS.defaultSelect);
         const result = await client.list('ORDERS', qb.build());
-        return textResult({ pendingOrders: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+        return textResult({
+          pendingOrders: result.value,
+          pagination: { returned: result.value.length, top: params.top, skip: params.skip },
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
   server.tool(
     'priority_get_order_shipment_status',
-    `Get shipment/tracking info for a specific order.
+    `Read ERP delivery/return document headers linked directly to an exact order.
 
-Returns shipping details including carrier, tracking number, and expected delivery date if available.`,
+Legacy shipments is an alias of erpDocuments. These headers and tracking labels do not prove carrier shipment or delivery. Multi-order linked-document coverage remains unverified.`,
     {
-      orderNumber: z.string().min(1).describe('The ORDNAME'),
+      orderNumber: z.string().min(1).describe('The exact ORDNAME'),
     },
-    async (params) => {
+    async (params, extra) => {
       try {
-        const qb = new ODataBuilder().expand('SHIPMENTS_SUBFORM');
-        const order = await client.get<Record<string, unknown>>('ORDERS', params.orderNumber, qb.build());
-        return textResult({ orderNumber: params.orderNumber, shipments: order['SHIPMENTS_SUBFORM'] ?? [] });
-      } catch (err) { throw toMcpError(err); }
+        const operation =
+          currentOperation() ??
+          createOperation('priority_get_order_shipment_status', {
+            ...(extra?.signal ? { signal: extra.signal } : {}),
+          });
+        if (
+          !toolAllowed(config, 'priority_get_order_shipment_status') ||
+          !toolAllowed(config, 'priority_get_order')
+        ) {
+          return textResult({
+            orderNumber: params.orderNumber,
+            deliveryVerified: false,
+            status: 'blocked',
+            meta: evidence(
+              operation,
+              'Priority:DOCUMENTS_D/exact-ORDNAME',
+              false,
+              [
+                'Order identity or shipment-source component is blocked by current tool policy; no source read was attempted.',
+              ],
+              false,
+            ),
+          });
+        }
+        const result = await orderDiagnosis(
+          {
+            orderNumber: params.orderNumber,
+            sections: ['shipments'],
+            budget: { maxRows: 100, maxPages: 8, deadlineAt: operation.deadlineAt },
+          },
+          { ...operation, client, config },
+        );
+        const section = result.sections.shipments;
+        return textResult({
+          orderNumber: params.orderNumber,
+          ...(section?.data && typeof section.data === 'object' ? section.data : {}),
+          deliveryVerified: false,
+          status: section?.status ?? 'incomplete',
+          identity: result.identity,
+          meta: section?.meta ?? result.meta,
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -107,8 +180,13 @@ Shows which orders can't be fully fulfilled due to insufficient inventory.`,
       try {
         const qb = new ODataBuilder().top(params.top).skip(params.skip);
         const result = await client.list('ORDERSBKMN', qb.build());
-        return textResult({ backorders: result.value, pagination: { returned: result.value.length, top: params.top, skip: params.skip } });
-      } catch (err) { throw toMcpError(err); }
+        return textResult({
+          backorders: result.value,
+          pagination: { returned: result.value.length, top: params.top, skip: params.skip },
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -122,17 +200,19 @@ Shows which orders can't be fully fulfilled due to insufficient inventory.`,
 Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
     {
       customerId: z.string().min(1).describe('CUSTNAME'),
-      items: z.array(z.object({
-        productId: z.string().min(1).describe('PARTNAME'),
-        quantity: z.number().positive(),
-        price: z.number().optional().describe('Unit price override'),
-      })).min(1),
+      items: z
+        .array(
+          z.object({
+            productId: z.string().min(1).describe('PARTNAME'),
+            quantity: z.number().positive(),
+            price: z.number().optional().describe('Unit price override'),
+          }),
+        )
+        .min(1),
       remarks: z.string().optional(),
       dryRun: z.boolean().default(true),
     },
     async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
       try {
         const body: Record<string, unknown> = {
           CUSTNAME: params.customerId,
@@ -144,11 +224,14 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
         };
         if (params.remarks) body.DETAILS = params.remarks;
 
-        if (params.dryRun) return dryRunResult('CREATE ORDER', body);
+        const gate = previewOrBlock(config, params.dryRun, 'CREATE ORDER', body);
+        if (gate) return gate;
 
-        const result = await client.create('ORDERS', body);
-        return textResult({ created: true, order: result });
-      } catch (err) { throw toMcpError(err); }
+        const outcome = await verifyRecordCreate(client, 'ORDERS', body);
+        return textResult({ created: outcome.verified, order: outcome.result, ...outcome });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -163,18 +246,29 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
       dryRun: z.boolean().default(true),
     },
     async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
       try {
         const body: Record<string, unknown> = {};
         if (params.remarks) body.DETAILS = params.remarks;
 
         if (Object.keys(body).length === 0) return textResult({ error: 'No fields to update.' });
-        if (params.dryRun) return dryRunResult('UPDATE ORDER ' + params.orderNumber, body);
 
-        const result = await client.update('ORDERS', params.orderNumber, body);
-        return textResult({ updated: true, orderNumber: params.orderNumber, result });
-      } catch (err) { throw toMcpError(err); }
+        const gate = previewOrBlock(
+          config,
+          params.dryRun,
+          `UPDATE ORDER ${params.orderNumber}`,
+          body,
+        );
+        if (gate) return gate;
+
+        const outcome = await verifyRecordUpdate(client, 'ORDERS', params.orderNumber, body);
+        return textResult({
+          updated: outcome.verified,
+          orderNumber: params.orderNumber,
+          ...outcome,
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -189,15 +283,26 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
       dryRun: z.boolean().default(true),
     },
     async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
       try {
-        const body = { CLOSED: 'Y', DETAILS: params.reason };
-        if (params.dryRun) return dryRunResult('CANCEL ORDER ' + params.orderNumber, body);
+        const body = { BOOLCLOSED: 'Y', DETAILS: params.reason };
 
-        const result = await client.update('ORDERS', params.orderNumber, body);
-        return textResult({ cancelled: true, orderNumber: params.orderNumber, result });
-      } catch (err) { throw toMcpError(err); }
+        const gate = previewOrBlock(
+          config,
+          params.dryRun,
+          `CANCEL ORDER ${params.orderNumber}`,
+          body,
+        );
+        if (gate) return gate;
+
+        const outcome = await verifyRecordUpdate(client, 'ORDERS', params.orderNumber, body);
+        return textResult({
+          cancelled: outcome.verified,
+          orderNumber: params.orderNumber,
+          ...outcome,
+        });
+      } catch (err) {
+        throw toMcpError(err);
+      }
     },
   );
 
@@ -205,21 +310,22 @@ Use dryRun=true (default) to preview. Disabled when PRIORITY_READ_ONLY=true.`,
     'priority_confirm_order',
     `Confirm/approve a sales order, moving it to confirmed status.
 
-⚠️ WRITE OPERATION. Use dryRun=true (default) to preview.`,
+⚠️ WRITE OPERATION. NOTE: disabled on this installation — see the response for why.`,
     {
       orderNumber: z.string().min(1).describe('ORDNAME'),
       dryRun: z.boolean().default(true),
     },
-    async (params) => {
-      const guard = checkWriteAllowed(config);
-      if (guard.blocked) return guard.result;
-      try {
-        const body = { STATDES: 'confirmed' };
-        if (params.dryRun) return dryRunResult('CONFIRM ORDER ' + params.orderNumber, body);
-
-        const result = await client.update('ORDERS', params.orderNumber, body);
-        return textResult({ confirmed: true, orderNumber: params.orderNumber, result });
-      } catch (err) { throw toMcpError(err); }
-    },
+    // Disabled: the old code PATCHed ORDSTATUSDES='confirmed'. ORDSTATUSDES is the status
+    // DESCRIPTION — a computed mirror, Hebrew on this install (values seen: טיוטא/בוצעה/שולמה/
+    // מבוטלת; there is no 'confirmed' state) — so the English literal can never match, and the
+    // field isn't the lever that drives an order-status transition.
+    async () =>
+      unavailableHere(
+        "Confirming an order by writing ORDSTATUSDES isn't supported: it's a computed status " +
+          "description (values here are טיוטא/בוצעה/שולמה/מבוטלת — no 'confirmed' state) and the English " +
+          'literal never matches. Order status is driven by the order lifecycle, not a direct field write.',
+        'Advance the order in the Priority orders screen, or identify the field/flag that drives the ' +
+          'transition with priority_get_entity_metadata and set it via priority_update_record.',
+      ),
   );
 }
