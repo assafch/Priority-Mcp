@@ -150,6 +150,7 @@ const rows: Array<
   ['priority_search_suppliers', 'suppliers', 'read', 'implemented', ['SUPPLIERS']],
   ['priority_list_warehouses', 'warehouses', 'read', 'implemented', ['WAREHOUSES']],
   ['priority_update_line', 'generic', 'write', 'implemented', []],
+  ['priority_delete_line', 'generic', 'write', 'implemented', []],
   ['priority_get_capabilities', 'meta', 'read', 'implemented', []],
   ['priority_healthcheck', 'meta', 'read', 'implemented', []],
   ['priority_prepare_query', 'generic', 'read', 'implemented', []],
