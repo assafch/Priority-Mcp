@@ -61,7 +61,18 @@ function toReleaseLine(line: Row): ReleaseLineFact {
 const RELEASE_EXPAND = 'TRANSORDER_J_SUBFORM($expand=TRANSIMPFILE_SUBFORM)';
 const RELEASE_SELECT = ['DOCNO', 'IMPFNUM', 'STATDES', 'CURDATE', 'UDATE', 'DOCREF', 'IVNUM'];
 
+/**
+ * A "מע'מ" line with no quantity on a release: Priority pulls the VAT-from-declaration line of
+ * the file content into a new release (first pilot file, 2026-11-23). It carries no goods and no cost.
+ */
+export const isEmptyVatReleaseLine = (line: Row): boolean =>
+  str(line.PARTNAME) === VAT_DECLARATION_PART &&
+  (num(line.PQUANT) ?? 0) === 0 &&
+  (num(line.TQUANT) ?? 0) === 0;
+
 function toRelease(doc: Row): ReleaseFact {
+  const all = rows(doc.TRANSORDER_J_SUBFORM);
+  const ignored = all.filter(isEmptyVatReleaseLine).length;
   return {
     docno: str(doc.DOCNO) ?? '',
     status: str(doc.STATDES) ?? '',
@@ -69,7 +80,8 @@ function toRelease(doc: Row): ReleaseFact {
     updatedAt: str(doc.UDATE),
     declaration: str(doc.DOCREF),
     customsInvoice: str(doc.IVNUM),
-    lines: rows(doc.TRANSORDER_J_SUBFORM).map(toReleaseLine),
+    lines: all.filter((l) => !isEmptyVatReleaseLine(l)).map(toReleaseLine),
+    ...(ignored ? { ignoredVatLines: ignored } : {}),
   };
 }
 

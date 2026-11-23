@@ -290,7 +290,7 @@ describe('pinvoice_set_declaration', () => {
     expect(r.reasons.join(' ')).toMatch(/לא נמצאה/);
   });
 
-  it('is marked as piloted; the steps not yet piloted are not', async () => {
+  it('is marked as piloted, and so is the receipt (first pilot, 2026-11-23)', async () => {
     const world = draftInvoiceWorld();
     const r = await setup(world).call('pinvoice_set_declaration', DECL);
     expect(r.piloted).toBe(true);
@@ -298,7 +298,7 @@ describe('pinvoice_set_declaration', () => {
       impfnum: 'IM1',
       date: '2026-01-10',
     });
-    expect(receipt.piloted).toBe(false);
+    expect(receipt.piloted).toBe(true);
   });
 });
 
@@ -327,7 +327,7 @@ describe('bonded_receipt', () => {
       verified: true,
       docno: 'GR1',
       documentStatus: 'טיוטא',
-      piloted: false,
+      piloted: true,
     });
     expect(r.nextStep).toMatch(/סופית/);
     expect(posts(world)).toEqual([

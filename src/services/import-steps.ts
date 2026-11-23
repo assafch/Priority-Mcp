@@ -33,7 +33,7 @@ import {
   lastDoneAt,
   recordStep,
 } from '../lib/step-ledger.js';
-import { type LoadedFileFacts, loadFileFacts } from './import-facts.js';
+import { type LoadedFileFacts, isEmptyVatReleaseLine, loadFileFacts } from './import-facts.js';
 
 /**
  * The executing import steps (phase B): the reversible steps of Priority's official import-file
@@ -68,7 +68,7 @@ export type StepStatus =
   | 'failed';
 
 export interface PlannedWrite {
-  method: 'POST' | 'PATCH';
+  method: 'POST' | 'PATCH' | 'DELETE';
   endpoint: string;
   body: Row;
 }
@@ -128,11 +128,12 @@ const definitelyRejected = (err: unknown): boolean =>
  */
 export const PILOTED: Record<PhaseBStep, boolean> = {
   declaration: true, // 2026-11-23, an open file at step 2
-  receipt: false,
-  fillDetail: false,
-  calc: false,
-  releaseDraft: false,
-  lineCosts: false,
+  // First pilot file, 2026-11-23 (one product, duty-free, GBP, full release); see the runbook table.
+  receipt: true,
+  fillDetail: true, // piloted with the old zeroing; deleting the VAT line has not run live yet
+  calc: true,
+  releaseDraft: true, // needed the VAT line deleted by hand; the code now ignores an empty one
+  lineCosts: true,
 };
 
 /**
@@ -1166,9 +1167,16 @@ function contentVsInvoice(facts: FileFacts): { matches: boolean; problems: strin
 
 const CONTENT_LINES = 'IMPFILEITEMS_SUBFORM';
 
+/** The "מע'מ" (VAT-from-declaration) rows of the file content, whatever their quantity. */
+const vatContentRows = (snapshot: LoadedFileFacts['snapshot']): Row[] =>
+  (snapshot.goodsContent ?? []).filter((c) => str(c.PARTNAME) === VAT_DECLARATION_PART);
+const hasQty = (c: Row) => (num(c.TQUANT) ?? 0) !== 0;
+
 /**
- * Step 5 — run "מילוי פירוט למחסן ערובה" (FILL_IMPFILES) and zero the VAT-from-declaration line
- * the program copies into the content.
+ * Step 5 — run "מילוי פירוט למחסן ערובה" (FILL_IMPFILES) and delete the VAT-from-declaration
+ * line the program copies into the content. A line that is only zeroed stays in the content, and
+ * a new release pulls it in (the first pilot file and its release, 2026-11-23); so the line is removed. When
+ * Priority refuses the delete, the line's quantity is set to 0 instead, as before.
  */
 export async function fillDetail(
   client: PriorityClient,
@@ -1186,11 +1194,24 @@ export async function fillDetail(
   if ('error' in loaded) return out.refused([loaded.error], { program });
   const { facts } = loaded;
   const before = contentVsInvoice(facts);
-  const vatPending = (facts.contentVatLineQty ?? 0) !== 0;
-  if (before.matches && !vatPending) {
+  const vatBefore = vatContentRows(loaded.snapshot);
+  if (before.matches && vatBefore.length === 0) {
     return out.alreadyDone(
-      `תכולת התיק כבר זהה לשורות המוצר בחשבונית הסחורה (${facts.content.length} מק"טים) ושורת ${VAT_DECLARATION_PART} מאופסת.`,
+      `תכולת התיק כבר זהה לשורות המוצר בחשבונית הסחורה (${facts.content.length} מק"טים) ואין בה שורת ${VAT_DECLARATION_PART}.`,
       { program, content: facts.content },
+    );
+  }
+  // A closed file is not changed. A VAT line with no quantity there is left as it is.
+  if (before.matches && facts.closed && !vatBefore.some(hasQty)) {
+    return out.alreadyDone(
+      `תכולת התיק זהה לשורות המוצר בחשבונית הסחורה (${facts.content.length} מק"טים).`,
+      {
+        program,
+        content: facts.content,
+        warnings: [
+          `בתכולה נשארה שורת ${VAT_DECLARATION_PART} בכמות 0, והתיק סגור ולכן הכלי אינו מוחק אותה. bonded_release_draft מתעלם משורה כזו כשפריוריטי מושך אותה לתעודת השחרור.`,
+        ],
+      },
     );
   }
   // Products already in place and only the VAT line left: the program is not run again.
@@ -1202,6 +1223,13 @@ export async function fillDetail(
     : gate(step, facts);
   if (reasons.length) return out.refused(reasons, { program });
 
+  const removal = (c: Row): PlannedWrite => ({
+    method: 'DELETE',
+    endpoint: client.resolveSubformRowUrl('IMPFILES', p.impfnum, CONTENT_LINES, {
+      KLINE: Number(c.KLINE),
+    }),
+    body: {},
+  });
   const spec: ActivationSpec = {
     form: 'IMPFILES',
     activation: program,
@@ -1210,26 +1238,14 @@ export async function fillDetail(
     acceptPrompts: p.acceptPrompts ?? [],
   };
   if (p.dryRun && vatOnly) {
-    const vatRows = (loaded.snapshot.goodsContent ?? []).filter(
-      (c) => str(c.PARTNAME) === VAT_DECLARATION_PART && (num(c.TQUANT) ?? 0) !== 0,
-    );
-    return out.preview(
-      vatRows.map((c) => ({
-        method: 'PATCH' as const,
-        endpoint: client.resolveSubformRowUrl('IMPFILES', p.impfnum, CONTENT_LINES, {
-          KLINE: Number(c.KLINE),
-        }),
-        body: { TQUANT: 0 },
-      })),
-      {
-        program,
-        note: `המוצרים כבר בתכולה; התוכנית לא תופעל שוב. יבוצע רק איפוס של שורת ${VAT_DECLARATION_PART}.`,
-      },
-    );
+    return out.preview(vatBefore.map(removal), {
+      program,
+      note: `המוצרים כבר בתכולה; התוכנית לא תופעל שוב. תימחק רק שורת ${VAT_DECLARATION_PART} (אם פריוריטי ידחה את המחיקה — הכמות שלה תאופס).`,
+    });
   }
   if (p.dryRun) {
     return programPreview(out, spec, p, deps, {
-      afterwards: `קריאה חוזרת של התכולה; אם התוכנית העתיקה שורת ${VAT_DECLARATION_PART}, איפוס הכמות שלה (PATCH TQUANT=0); השוואה לחשבונית הסחורה.`,
+      afterwards: `קריאה חוזרת של התכולה; אם התוכנית העתיקה שורת ${VAT_DECLARATION_PART}, מחיקתה (DELETE; אם פריוריטי דוחה — איפוס הכמות, PATCH TQUANT=0); השוואה לחשבונית הסחורה.`,
     });
   }
   if (config.priorityReadOnly) return out.blocked();
@@ -1237,7 +1253,7 @@ export async function fillDetail(
   let trace: ActivationTrace | undefined;
   let release = () => {};
   if (vatOnly) {
-    // No program runs. The zeroing is repeatable, but it still takes the claim and is recorded.
+    // No program runs. The removal is repeatable, but it still takes the claim and is recorded.
     const begun = beginStep(out, ledgerPath, { impfnum: p.impfnum, step }, now(), {
       cooldown: false,
     });
@@ -1268,29 +1284,42 @@ export async function fillDetail(
     let after = await readFacts(client, p.impfnum);
     if ('error' in after) return unverified(`${sofar} הקריאה החוזרת נכשלה: ${after.error}`);
     const sent: PlannedWrite[] = [];
-    if ((after.facts.contentVatLineQty ?? 0) !== 0) {
-      // Every VAT-from-declaration line with a quantity is zeroed, not only the first one.
-      const vatRows = (after.snapshot.goodsContent ?? []).filter(
-        (c) => str(c.PARTNAME) === VAT_DECLARATION_PART && (num(c.TQUANT) ?? 0) !== 0,
-      );
+    const warnings: string[] = [];
+    const vatRows = vatContentRows(after.snapshot);
+    if (vatRows.length) {
       const incomplete = (reason: string) =>
         recordAfter(
           ledgerPath,
           { impfnum: p.impfnum, step, phase: 'incomplete' },
           out.notDone('incomplete', reason, { program, procedure: trace, sent }),
         );
-      if (vatRows.length === 0 || vatRows.some((c) => num(c.KLINE) === null)) {
+      if (vatRows.some((c) => num(c.KLINE) === null)) {
         return incomplete(
-          `בתכולה יש שורת ${VAT_DECLARATION_PART} בכמות ${after.facts.contentVatLineQty}, אך לא נמצא מספר השורה שלה. מאפסים אותה במסך "תכולה במחסני ערובה".`,
+          `בתכולה יש שורת ${VAT_DECLARATION_PART}, אך לא נמצא מספר השורה שלה. מוחקים אותה במסך "תכולה במחסני ערובה".`,
         );
       }
+      // Every VAT-from-declaration line is removed, not only the first one.
       for (const row of vatRows) {
         const kline = num(row.KLINE) as number;
-        const write: PlannedWrite = {
+        const write = removal(row);
+        try {
+          await client.deleteSubformRow('IMPFILES', p.impfnum, CONTENT_LINES, { KLINE: kline });
+          sent.push(write);
+          continue;
+        } catch (err) {
+          // An unclear answer is judged by the re-read below; the delete may have happened.
+          if (!definitelyRejected(err)) {
+            sent.push(write);
+            continue;
+          }
+          warnings.push(
+            `פריוריטי דחה את מחיקת שורת ${VAT_DECLARATION_PART} (שורה ${kline}): ${describeError(err)}.${hasQty(row) ? ' הכמות שלה אופסה במקום.' : ''} השורה נשארה בתכולה בכמות 0; bonded_release_draft מתעלם ממנה, ואפשר למחוק אותה במסך "תכולה במחסני ערובה".`,
+          );
+        }
+        if (!hasQty(row)) continue;
+        const zero: PlannedWrite = {
           method: 'PATCH',
-          endpoint: client.resolveSubformRowUrl('IMPFILES', p.impfnum, CONTENT_LINES, {
-            KLINE: kline,
-          }),
+          endpoint: write.endpoint,
           body: { TQUANT: 0 },
         };
         try {
@@ -1299,48 +1328,59 @@ export async function fillDetail(
             p.impfnum,
             CONTENT_LINES,
             { KLINE: kline },
-            write.body,
+            zero.body,
           );
-          sent.push(write);
+          sent.push(zero);
         } catch (err) {
           return incomplete(
-            `המוצרים בתכולה, אך איפוס שורת ${VAT_DECLARATION_PART} (שורה ${kline}) נכשל: ${describeError(err)}. קריאה נוספת תנסה רק את האיפוס.`,
+            `המוצרים בתכולה, אך לא ניתן היה למחוק את שורת ${VAT_DECLARATION_PART} (שורה ${kline}) או לאפס אותה: ${describeError(err)}. קריאה נוספת תנסה רק את השורה הזו.`,
           );
         }
       }
       after = await readFacts(client, p.impfnum);
       if ('error' in after) {
-        return unverified(`האיפוס נשלח, אך הקריאה החוזרת נכשלה: ${after.error}`, { sent });
+        return unverified(`השורה טופלה, אך הקריאה החוזרת נכשלה: ${after.error}`, { sent });
       }
     }
 
     const check = contentVsInvoice(after.facts);
-    if (!check.matches || (after.facts.contentVatLineQty ?? 0) !== 0) {
+    const vatLeft = vatContentRows(after.snapshot);
+    if (!check.matches || vatLeft.some(hasQty)) {
       return unverified(
-        `${trace ? `אחרי "${PROGRAM_TITLES[program]}"` : 'אחרי האיפוס'} התכולה אינה זהה לחשבונית הסחורה: ${
+        `${trace ? `אחרי "${PROGRAM_TITLES[program]}"` : `אחרי הטיפול בשורת ${VAT_DECLARATION_PART}`} התכולה אינה זהה לחשבונית הסחורה: ${
           check.problems.join('; ') ||
           (after.facts.content.length === 0
             ? 'התכולה ריקה'
-            : `שורת ${VAT_DECLARATION_PART} לא אופסה`)
+            : `שורת ${VAT_DECLARATION_PART} עדיין בתכולה עם כמות`)
         }. בודקים במסך "תכולה במחסני ערובה"; לא מריצים שוב את התוכנית.`,
         { content: after.facts.content, sent },
       );
     }
+    if (vatLeft.length && warnings.length === 0) {
+      warnings.push(
+        `המחיקה נשלחה, אך בקריאה החוזרת עדיין יש בתכולה שורת ${VAT_DECLARATION_PART} בכמות 0. bonded_release_draft מתעלם ממנה; אפשר למחוק אותה במסך "תכולה במחסני ערובה".`,
+      );
+    }
     // The content itself is the proof here; what the program said at its end is passed on.
     const complaint = programComplaint(trace);
+    if (complaint) {
+      warnings.push(`התוכנית הסתיימה עם הודעה: ${complaint}. התכולה נבדקה ונמצאה תקינה.`);
+    }
     return recordAfter(
       ledgerPath,
       { impfnum: p.impfnum, step, phase: 'done' },
       out.done(
-        `תכולת התיק זהה לשורות המוצר בחשבונית הסחורה (${after.facts.content.length} מק"טים) ושורת ${VAT_DECLARATION_PART} מאופסת (נקרא מחדש מפריוריטי).`,
+        `תכולת התיק זהה לשורות המוצר בחשבונית הסחורה (${after.facts.content.length} מק"טים) ${
+          vatLeft.length
+            ? `ושורת ${VAT_DECLARATION_PART} שבה בכמות 0`
+            : `ואין בה שורת ${VAT_DECLARATION_PART}`
+        } (נקרא מחדש מפריוריטי).`,
         {
           program,
           procedure: trace,
           content: after.facts.content,
           sent,
-          warnings: complaint
-            ? [`התוכנית הסתיימה עם הודעה: ${complaint}. התכולה נבדקה ונמצאה תקינה.`]
-            : [],
+          warnings,
           nextStep: 'impfile_run_calc (חישוב העמסה), ואז בדיקה עם impfile_close.',
         },
       ),
@@ -1565,9 +1605,23 @@ export async function createReleaseDraft(
     continues = drafts[0].docno;
   }
 
-  const planFor = (docno: string, lines: Row[]) => {
+  /**
+   * Priority pulls the file content's "מע'מ" line into a new release. With no quantity it is not
+   * goods: left out of the comparison and of the quantity writes, and reported as a warning. With
+   * a quantity it would move a VAT part into stock, so it stops the step.
+   */
+  const planFor = (docno: string, allLines: Row[]) => {
     const problems: string[] = [];
-    const pulled = sumByPart(lines, 'PQUANT');
+    const lines = allLines.filter((l) => !isEmptyVatReleaseLine(l));
+    for (const l of lines.filter((x) => str(x.PARTNAME) === VAT_DECLARATION_PART)) {
+      problems.push(
+        `בשורה ${String(l.KLINE)} של התעודה יש שורת ${VAT_DECLARATION_PART} בכמות ${num(l.PQUANT) ?? 0} (מבוקש ${num(l.TQUANT) ?? 0}). היא אינה מוצר ואסור שתיכנס למלאי; מוחקים אותה במסך.`,
+      );
+    }
+    const pulled = sumByPart(
+      lines.filter((l) => str(l.PARTNAME) !== VAT_DECLARATION_PART),
+      'PQUANT',
+    );
     for (const [part, qty] of pulled) {
       if (balance.get(part) !== qty) {
         problems.push(`${part}: בתעודה ${qty}, יתרה בערובה ${balance.get(part) ?? 'אין'}`);
@@ -1577,6 +1631,7 @@ export async function createReleaseDraft(
     if (absent.length) problems.push(`מק"טים עם יתרה בערובה שאינם בתעודה: ${absent.join(', ')}`);
     const { targets, problems: targetProblems } = releaseTargets(lines, p.quantities);
     problems.push(...targetProblems);
+    const ignoredVat = allLines.length - lines.length;
     const writes: PlannedWrite[] = lines
       .filter((l) => num(l.TQUANT) !== targets.get(Number(l.KLINE)))
       .map((l) => ({
@@ -1587,8 +1642,10 @@ export async function createReleaseDraft(
         }),
         body: { TQUANT: targets.get(Number(l.KLINE)) ?? 0 },
       }));
-    return { problems, targets, writes };
+    return { problems, targets, writes, goodsLines: lines, ignoredVat };
   };
+  const vatWarning = (docno: string, count: number) =>
+    `בתעודת השחרור ${docno} יש ${count === 1 ? 'שורת' : `${count} שורות`} ${VAT_DECLARATION_PART} בכמות 0 שפריוריטי משך מתכולת התיק. הכלי מתעלם ממנה: היא אינה מוצר ואין לה עלות. לא נבדק עדיין אם פריוריטי מאפשר להפוך את התעודה לסופית כשהיא בה; אם לא — מוחקים אותה במסך לפני שהופכים לסופית.`;
   const describeLines = (lines: Row[]) =>
     lines.map((l) => ({ part: l.PARTNAME, qty: l.TQUANT, available: l.PQUANT }));
 
@@ -1604,7 +1661,7 @@ export async function createReleaseDraft(
         `תעודת השחרור ${docno} שבטיוטה היא למחסן ${String(doc.TOWARHSNAME)}/${String(doc.TOLOCNAME)}, ולא ${p.toWarehouse}/${p.toLocation} כמבוקש. הכלי אינו משנה יעד של תעודה קיימת.`,
       );
     }
-    const lines = rows(doc[RELEASE_LINES]);
+    const lines = rows(doc[RELEASE_LINES]).filter((l) => !isEmptyVatReleaseLine(l));
     const { targets } = releaseTargets(lines, p.quantities);
     const entered = lines
       .filter((l) => (num(l.TQUANT) ?? 0) !== 0 && num(l.TQUANT) !== targets.get(Number(l.KLINE)))
@@ -1632,13 +1689,14 @@ export async function createReleaseDraft(
     if (blockers.length) return out.refused(blockers);
     const lines = rows(current[RELEASE_LINES]);
     const plan = planFor(continues, lines);
-    if (lines.length > 0 && plan.problems.length === 0 && plan.writes.length === 0) {
+    if (plan.goodsLines.length > 0 && plan.problems.length === 0 && plan.writes.length === 0) {
       return out.alreadyDone(
-        `תעודת השחרור ${continues} בטיוטה וכבר נושאת את הכמויות המבוקשות (${lines.length} שורות).`,
+        `תעודת השחרור ${continues} בטיוטה וכבר נושאת את הכמויות המבוקשות (${plan.goodsLines.length} שורות).`,
         {
           docno: continues,
           documentStatus: current.STATDES,
           lines: describeLines(lines),
+          ...(plan.ignoredVat ? { warnings: [vatWarning(continues, plan.ignoredVat)] } : {}),
           nextStep: 'bonded_line_costs על התעודה, ואז אסף משנה את הסטטוס לסופית.',
         },
       );
@@ -1815,10 +1873,11 @@ export async function createReleaseDraft(
       return stop(`לא ניתן היה לקרוא את תעודת השחרור ${docno} אחרי היצירה: ${describeError(err)}`);
     }
     const lines = rows(doc?.[RELEASE_LINES]);
-    if (!doc || lines.length === 0) {
+    const plan = planFor(docno, lines);
+    if (plan.ignoredVat) warnings.push(vatWarning(docno, plan.ignoredVat));
+    if (!doc || plan.goodsLines.length === 0) {
       return stop(`בתעודת השחרור ${docno} אין שורות — פריוריטי לא משך את תכולת התיק. בודקים במסך.`);
     }
-    const plan = planFor(docno, lines);
     if (plan.problems.length) {
       return stop(
         `השורות בתעודת השחרור ${docno} אינן תואמות את היתרה בערובה או את הכמויות שהתבקשו: ${plan.problems.join('; ')}. הטיוטה נשארה כמות שהיא; בודקים במסך.`,
@@ -1853,7 +1912,9 @@ export async function createReleaseDraft(
       return stop(`הכמויות נכתבו אך הקריאה החוזרת של ${docno} נכשלה: ${describeError(err)}.`);
     }
     const afterLines = rows(after?.[RELEASE_LINES]);
-    const wrong = afterLines.filter((l) => num(l.TQUANT) !== plan.targets.get(Number(l.KLINE)));
+    const wrong = afterLines
+      .filter((l) => !isEmptyVatReleaseLine(l))
+      .filter((l) => num(l.TQUANT) !== plan.targets.get(Number(l.KLINE)));
     if (!after || afterLines.length !== lines.length || wrong.length) {
       return stop(
         `בתעודת השחרור ${docno} נשארו ${wrong.length} שורות שהכמות בהן אינה הכמות המבוקשת (נקרא מחדש).`,
@@ -1886,7 +1947,7 @@ export async function createReleaseDraft(
       ledgerPath,
       { impfnum: p.impfnum, step, phase: 'done', docno },
       out.done(
-        `תעודת השחרור ${docno} בטיוטה, ${afterLines.length} שורות, כל כמות כמבוקש (נקרא מחדש מפריוריטי). לא נכתב סטטוס.`,
+        `תעודת השחרור ${docno} בטיוטה, ${afterLines.filter((l) => !isEmptyVatReleaseLine(l)).length} שורות מוצר, כל כמות כמבוקש (נקרא מחדש מפריוריטי). לא נכתב סטטוס.`,
         {
           docno,
           documentStatus: after.STATDES,
@@ -2021,6 +2082,11 @@ export async function registerLineCosts(
                 'שחרור חלקי (או תעודת שחרור נוספת פתוחה): ההשוואה של עלויות היבוא לסך חשבוניות העלות של התיק אפשרית רק כשכל היתרה משוחררת.',
               ]),
           ...(tieProblem ? [tieProblem] : []),
+          ...(release.ignoredVatLines
+            ? [
+                `בתעודה ${release.docno} יש שורת ${VAT_DECLARATION_PART} בכמות 0 (נמשכה מתכולת התיק). היא אינה מוצר, ולכן אינה נדרשת לשאת עלות ואינה נספרת כאן.`,
+              ]
+            : []),
         ],
       },
     };

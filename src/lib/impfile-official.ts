@@ -93,6 +93,11 @@ export interface ReleaseFact {
   /** "חשבונית מכס" on the release (IVNUM) */
   customsInvoice: string | null;
   lines: ReleaseLineFact[];
+  /**
+   * "מע'מ" (VAT-from-declaration) lines with no quantity that Priority pulled into the release
+   * from the file content. They are not goods: left out of `lines`, counted here.
+   */
+  ignoredVatLines?: number;
 }
 
 export interface FileFacts {
@@ -456,7 +461,7 @@ export function computeOfficialSteps(facts: FileFacts): OfficialStage {
     if ((facts.contentVatLineQty ?? 0) !== 0) {
       state = 'missing';
       detail.push(
-        `בתכולה יש שורת ${VAT_DECLARATION_PART} בכמות ${facts.contentVatLineQty} — היא אינה מוצר ויש לאפס אותה לפני חישוב ההעמסה.`,
+        `בתכולה יש שורת ${VAT_DECLARATION_PART} בכמות ${facts.contentVatLineQty} — היא אינה מוצר ויש למחוק אותה (bonded_fill_detail) לפני חישוב ההעמסה.`,
       );
     }
     push(
