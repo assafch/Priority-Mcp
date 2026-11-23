@@ -45,6 +45,7 @@ const orChain = (field: string, values: string[]): string =>
 function toReleaseLine(line: Row): ReleaseLineFact {
   const cost = one(line.TRANSIMPFILE_SUBFORM);
   return {
+    kline: num(line.KLINE),
     part: str(line.PARTNAME) ?? '',
     description: str(line.PDES),
     qty: num(line.TQUANT) ?? 0,
@@ -196,7 +197,7 @@ export async function loadFileFacts(
     };
   });
 
-  const vatLine = rows(record.IMPFILEITEMS_SUBFORM).find(
+  const vatLines = rows(record.IMPFILEITEMS_SUBFORM).filter(
     (c) => str(c.PARTNAME) === VAT_DECLARATION_PART,
   );
   const facts: FileFacts = {
@@ -228,7 +229,9 @@ export async function loadFileFacts(
           .filter((p): p is string => !!p),
       ),
     ],
-    contentVatLineQty: vatLine ? (num(vatLine.TQUANT) ?? 0) : null,
+    contentVatLineQty: vatLines.length
+      ? vatLines.reduce((sum, c) => sum + Math.abs(num(c.TQUANT) ?? 0), 0)
+      : null,
     customsEstimateWithoutCountry: rows(record.IMPFILECUSTOMS_SUBFORM).filter(
       (c) => str(c.PARTNAME) && !str(c.COUNTRYNAME),
     ).length,

@@ -10,4 +10,6 @@ output/playwright/
 # Generated offline measurements and local profiler artifacts.
 artifacts/
 output/close-invoice-attempts.jsonl
+output/import-step-attempts.jsonl
+output/import-step-claims/
 output/locks/
