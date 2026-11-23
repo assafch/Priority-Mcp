@@ -30,14 +30,15 @@ function toResult(outcome: StepOutcome) {
 }
 
 const COMMON = `Common contract: dryRun=true (default) returns the plan and sends nothing. status is one of
-preview | refused (a precondition is missing or could not be read) | blocked (PRIORITY_READ_ONLY) |
+preview | refused (a precondition is missing or could not be read) | blocked (PRIORITY_READ_ONLY, or
+a form answered with no rows even unfiltered, so an empty read cannot be trusted; retry in a few minutes) |
 done (written AND confirmed by re-reading) | already-done (nothing sent) | incomplete (a draft exists
 but is not complete; calling again continues it, never creates a second one) | unverified (sent, result
 not visible or not provable; wait, re-read, do not resend) | cancelled (a Priority program asked
 something unexpected and was cancelled unanswered) | failed (nothing written). A draft that already
 carries quantities other than the requested ones is never overwritten: the tool refuses. "piloted": false means this tool
 has not yet passed a supervised run on a real file — its first real run on each file type is done
-with the owner watching.`;
+with the owner watching; "piloted": true means it has.`;
 
 const impfnum = z.string().min(1).max(40).describe("Import file number, e.g. 'IM99000001'");
 const isoDate = z

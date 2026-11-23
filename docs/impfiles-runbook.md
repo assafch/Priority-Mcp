@@ -67,7 +67,12 @@ document status and never run the close or the costing.
   tool refuses and names the lines.
 - The six tools get a three-minute budget per call (other tools: twenty seconds), so a program
   that ends cleanly is not cut off before its re-read.
-- `"piloted": false` on every result until the tool passed its pilot (below).
+- Before believing an empty read where a create would follow (no receipt yet, no release yet, an
+  invoice "not found"), a tool reads the same form once more without any filter. These forms are
+  never empty, so if that read is empty too the tool answers `blocked`, sends nothing and leaves no
+  cooldown: try again in a few minutes. (On 2026-11-23 the supplier-invoice reads came back empty
+  for a while although the invoices existed.)
+- `"piloted": false` on every result until the tool passed its pilot (below); `true` after.
 
 ### Pilot protocol
 
@@ -124,11 +129,12 @@ When a result is not `done`:
   then decide.
 - `refused` — nothing was sent; `reasons` says what is missing.
 
-After a clean pilot, mark the tool as piloted here, with the date and the file:
+After a clean pilot, mark the tool as piloted here, with the date and the file, and set its value
+in `PILOTED` (`src/services/import-steps.ts`) in the same change:
 
 | Tool | Piloted on | File |
 |---|---|---|
-| `pinvoice_set_declaration` | — | — |
+| `pinvoice_set_declaration` | 2026-11-23 | an open file at step 2; two lines, checked by re-read and on screen |
 | `bonded_receipt` | — | — |
 | `bonded_fill_detail` | — | — |
 | `impfile_run_calc` | — | — |
