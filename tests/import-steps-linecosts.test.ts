@@ -110,7 +110,7 @@ describe('bonded_line_costs', () => {
     expect(preview).toMatchObject({
       status: 'preview',
       program: 'IMPORTCOSTPERLINE',
-      piloted: false,
+      piloted: true,
     });
     expect(t.sessions()).toBe(0);
     const probed = await t.call('bonded_line_costs', { ...COSTS, probe: true });
@@ -140,6 +140,18 @@ describe('bonded_line_costs', () => {
     expect(r.nextStep).toMatch(/סופית/);
     expect(world.writes).toEqual([]);
     expect(t.ledger().map((l) => l.phase)).toEqual(['in_flight', 'done']);
+  });
+
+  it('an empty VAT line on the release needs no cost: done, with a warning', async () => {
+    const world = releaseWorld();
+    releaseLines(world).push({ KLINE: 3, PARTNAME: "מע'מ", PQUANT: 0, TQUANT: 0 });
+    const t = setup(world, { ...SDK, onActivate: registerCosts(world) });
+    const r = await t.call('bonded_line_costs', RUN);
+    expect(r).toMatchObject({ status: 'done', verified: true, release: 'BD1' });
+    expect(r.lines.map((l: Row) => l.part)).toEqual(['P1', 'P2']);
+    expect(r.warnings.join(' ')).toMatch(/מע'מ בכמות 0/);
+    const again = await t.call('bonded_line_costs', { ...COSTS, dryRun: true });
+    expect(again.status).toBe('already-done');
   });
 
   it('adds the whole-file reconciliation when the release takes the whole balance', async () => {

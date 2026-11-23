@@ -109,6 +109,38 @@ describe('bonded_line_costs_guide', () => {
     expect(r.lineCosts).toHaveLength(2);
   });
 
+  it('reads live: a cost registered after the first call shows on the next one (first pilot)', async () => {
+    const uncosted = {
+      DOCNO: 'BD1',
+      STATDES: 'סופית',
+      TRANSORDER_J_SUBFORM: [{ PARTNAME: 'P1', TQUANT: 5, KLINE: 1, TRANSIMPFILE_SUBFORM: null }],
+    };
+    const h = harness();
+    stub(closedFile, [uncosted]);
+    const first = await h.call('bonded_line_costs_guide', { impfnum: 'IM1' });
+    expect(first.lineCosts[0].linesWithoutCost).toBe(1);
+    // The program registers the cost outside this client: nothing here clears its cache.
+    stub(closedFile, [{ ...release, TRANSORDER_J_SUBFORM: [release.TRANSORDER_J_SUBFORM[0]] }]);
+    const second = await h.call('bonded_line_costs_guide', { impfnum: 'IM1' });
+    expect(second.lineCosts[0].linesWithoutCost).toBe(0);
+    expect(second.warnings).toEqual([]);
+  });
+
+  it('does not count an empty VAT line on a release as a line without cost', async () => {
+    stub(closedFile, [
+      {
+        ...release,
+        TRANSORDER_J_SUBFORM: [
+          release.TRANSORDER_J_SUBFORM[0],
+          { PARTNAME: "מע'מ", TQUANT: 0, KLINE: 2, TRANSIMPFILE_SUBFORM: null },
+        ],
+      },
+    ]);
+    const r = await harness().call('bonded_line_costs_guide', { impfnum: 'IM1' });
+    expect(r.lineCosts).toEqual([{ docno: 'BD1', status: 'סופית', lines: 1, linesWithoutCost: 0 }]);
+    expect(r.warnings).toEqual([]);
+  });
+
   it('reports an unreadable release list as unknown, not as costed', async () => {
     stub(closedFile, new DOMException('timeout', 'TimeoutError'));
     const r = await harness().call('bonded_line_costs_guide', { impfnum: 'IM1' });
