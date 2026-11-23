@@ -13,3 +13,4 @@ output/close-invoice-attempts.jsonl
 output/import-step-attempts.jsonl
 output/import-step-claims/
 output/locks/
+output/import-approvals/

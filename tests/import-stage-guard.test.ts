@@ -9,6 +9,7 @@ import {
   blockStageViolation,
   findStageViolation,
   runWithReleaseDraftScope,
+  runWithReleaseFinalScope,
 } from '../src/lib/import-stage-guard.js';
 import { createLogger } from '../src/logger.js';
 import { registerGenericTools } from '../src/tools/generic.js';
@@ -309,5 +310,49 @@ describe('generic tools stage lock', () => {
       confirm: false,
     });
     expect(r.status).not.toBe('blocked');
+  });
+});
+
+describe('the release-final opening (bonded_release_finalize)', () => {
+  const HEADER = "DOCUMENTS_J(DOCNO='BD1',TYPE='J')";
+  const LINE = `${HEADER}/TRANSORDER_J_SUBFORM(KLINE=1,TYPE='J')`;
+  const inFinal = (method: string, target: string, body: unknown) =>
+    runWithReleaseFinalScope(async () => findStageViolation(method, target, body));
+
+  it('lets exactly one header PATCH to final through, inside the scope only', async () => {
+    expect(await inFinal('PATCH', HEADER, { STATDES: 'סופית' })).toBeNull();
+    expect(findStageViolation('PATCH', HEADER, { STATDES: 'סופית' })?.rule).toBe('bonded-release');
+  });
+
+  it('keeps everything else blocked inside the scope', async () => {
+    const blocked: Array<[string, string, unknown]> = [
+      ['PATCH', HEADER, { STATDES: 'סופית', TOWARHSNAME: 'X' }],
+      ['PATCH', HEADER, { STATDES: 'טיוטא' }],
+      ['PATCH', HEADER, { STATDES: 'מבוטלת' }],
+      ['PATCH', HEADER, { TQUANT: 1 }],
+      ['PATCH', LINE, { STATDES: 'סופית' }],
+      ['PATCH', 'DOCUMENTS_J', { STATDES: 'סופית' }],
+      ['POST', 'DOCUMENTS_J', { IMPFNUM: 'IM1' }],
+      ['DELETE', HEADER, undefined],
+    ];
+    for (const [method, target, body] of blocked) {
+      expect((await inFinal(method, target, body))?.rule, `${method} ${target}`).toBe(
+        'bonded-release',
+      );
+    }
+    expect((await inFinal('PATCH', "IMPFILES('IM1')", { CLOSED: 'Y' }))?.rule).toBe(
+      'impfile-status',
+    );
+  });
+
+  it('the two openings do not open each other', async () => {
+    expect(
+      (
+        await runWithReleaseDraftScope(async () =>
+          findStageViolation('PATCH', HEADER, { STATDES: 'סופית' }),
+        )
+      )?.rule,
+    ).toBe('bonded-release');
+    expect((await inFinal('POST', 'DOCUMENTS_J', { IMPFNUM: 'IM1' }))?.rule).toBe('bonded-release');
   });
 });

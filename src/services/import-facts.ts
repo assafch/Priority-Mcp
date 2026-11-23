@@ -1,6 +1,7 @@
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import {
+  type CostingReadiness,
   type FileFacts,
   type InvoiceFact,
   type PartCostFact,
@@ -8,6 +9,7 @@ import {
   type ReleaseLineFact,
   type ReleaseScanRow,
   VAT_DECLARATION_PART,
+  computeCostingReadiness,
 } from '../lib/impfile-official.js';
 import type { ReceiptRow } from '../lib/impfile-stage.js';
 import type { ImpfileSnapshot } from '../lib/impfiles-logic.js';
@@ -357,4 +359,32 @@ export async function readClosedByFile(client: PriorityClient): Promise<Record<s
     if (key) out[key] = f.CLOSED === 'Y';
   }
   return out;
+}
+
+/**
+ * Company-wide readiness for a costing run (impfile_costing_readiness, costing_run): every release
+ * dated on or after `since` (default: the last 365 days), the closed flag of every file, and the
+ * last costing run. `readiness` is null when the costing log cannot be read.
+ */
+export async function loadCostingReadiness(
+  client: PriorityClient,
+  since?: string,
+  now: number = Date.now(),
+): Promise<{ since: string; readiness: CostingReadiness | null }> {
+  const from = since ?? new Date(now - 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  const [scan, closedByFile, lastCostingAt] = await Promise.all([
+    scanReleases(client, from),
+    readClosedByFile(client),
+    readLastCostingAt(client),
+  ]);
+  if (lastCostingAt === undefined) return { since: from, readiness: null };
+  return {
+    since: from,
+    readiness: computeCostingReadiness({
+      releases: scan.releases,
+      scanComplete: scan.complete,
+      closedByFile,
+      lastCostingAt,
+    }),
+  };
 }

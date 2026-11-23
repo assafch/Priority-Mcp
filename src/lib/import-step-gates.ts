@@ -25,6 +25,12 @@ export type PhaseBStep =
   | 'releaseDraft'
   | 'lineCosts';
 
+/** The irreversible steps (phase C): each runs only with an approval code from its own preview. */
+export type PhaseCStep = 'receiptFinal' | 'close' | 'releaseFinal' | 'costing';
+
+/** Every step the step ledger records. */
+export type ImportStep = PhaseBStep | PhaseCStep;
+
 export interface GateInput {
   /** declaration: the draft invoice the declaration is written on */
   invoiceNumber?: string;

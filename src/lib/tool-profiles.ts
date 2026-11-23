@@ -109,8 +109,14 @@ const STEP_TOOLS: ReadonlySet<string> = new Set([
   'impfile_run_calc',
   'bonded_release_draft',
   'bonded_line_costs',
+  'bonded_receipt_finalize',
+  'impfile_close_run',
+  'bonded_release_finalize',
 ]);
+/** The costing program runs on every part of the company: about a minute live, five allowed. */
+export const COSTING_TOOL_BUDGET_MS = 300_000;
 export function operationBudgetMsForTool(name: string): number | undefined {
+  if (name === 'costing_run') return COSTING_TOOL_BUDGET_MS;
   return STEP_TOOLS.has(name) ? STEP_TOOL_BUDGET_MS : undefined;
 }
 
