@@ -4,6 +4,7 @@ import { toMcpError } from '../client/errors.js';
 import { ODataBuilder } from '../client/odata-builder.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
+import { VAT_DECLARATION_PART } from '../lib/impfile-official.js';
 import { FINAL_DOC_STATUS } from '../lib/impfile-stage.js';
 import { goodsReadback } from '../lib/impfiles-logic.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
@@ -45,10 +46,14 @@ export function registerBondedTools(server: McpServer, client: PriorityClient, _
     const qb = withItems
       ? new ODataBuilder().expand('IMPFILEITEMS_SUBFORM')
       : new ODataBuilder().select('IMPFNUM', 'STATDES', 'CLOSED');
-    return client.get<Row>('IMPFILES', impfnum, qb.build());
+    // Read live: the step tools change the file through programs, which leave the cache stale.
+    return client.get<Row>('IMPFILES', impfnum, qb.build(), { cache: false });
   };
 
-  // Releases of one file with, per release, how many lines carry a per-line import cost.
+  // Releases of one file with, per release, how many lines carry a per-line import cost. Read
+  // live: "רישום עלויות יבוא לשורה" runs as a program, so a cached answer from before it is stale
+  // (first pilot file, 2026-11-23: linesWithoutCost 1 right after a clean run). An empty "מע'מ" line
+  // pulled from the file content is not goods and is not counted.
   const releaseLineCosts = async (
     impfnum: string,
   ): Promise<Array<{ docno: string; status: string; lines: number; linesWithoutCost: number }>> => {
@@ -59,9 +64,11 @@ export function registerBondedTools(server: McpServer, client: PriorityClient, _
         'TRANSORDER_J_SUBFORM($select=PARTNAME,TQUANT,KLINE;$expand=TRANSIMPFILE_SUBFORM($select=IMPFCOST,TOTCOST,UDATE))',
       )
       .top(200);
-    const rows = (await client.list<Row>('DOCUMENTS_J', qb.build())).value;
+    const rows = (await client.list<Row>('DOCUMENTS_J', qb.build(), { cache: false })).value;
     return rows.map((doc) => {
-      const lines = (doc.TRANSORDER_J_SUBFORM as Row[] | undefined) ?? [];
+      const lines = ((doc.TRANSORDER_J_SUBFORM as Row[] | undefined) ?? []).filter(
+        (l) => !(l.PARTNAME === VAT_DECLARATION_PART && (Number(l.TQUANT) || 0) === 0),
+      );
       const withoutCost = lines.filter((line) => {
         const cost = (line.TRANSIMPFILE_SUBFORM as Row | null | undefined)?.IMPFCOST;
         return typeof cost !== 'number' || cost === 0;
@@ -153,7 +160,7 @@ even before release. Returns the step guidance + a read-back of the file's goods
     `מילוי פירוט למחסן ערובה / תכולה במחסני ערובה (spec §Phase 5). READ-ONLY GUIDE — fills in nothing.
 
 The step itself is done by bonded_fill_detail, which runs Priority's program "מילוי פירוט למחסן
-ערובה" after the receipt is final and zeroes the VAT line the program copies. The pallet number in
+ערובה" after the receipt is final and deletes the VAT line the program copies. The pallet number in
 "תכולה במחסני ערובה" is not written by any tool. This guide only explains the step and reads back
 the file's goods content; results carry "mutates": false.`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },

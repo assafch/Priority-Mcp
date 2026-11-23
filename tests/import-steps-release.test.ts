@@ -80,7 +80,7 @@ describe('bonded_release_draft', () => {
   it('previews by default and sends nothing', async () => {
     const world = closedWorld();
     const r = await setup(world).call('bonded_release_draft', RELEASE);
-    expect(r).toMatchObject({ status: 'preview', piloted: false });
+    expect(r).toMatchObject({ status: 'preview', piloted: true });
     expect(r.wouldSend[0]).toMatchObject({ method: 'POST', body: { IMPFNUM: 'IM1' } });
     expect(world.writes).toEqual([]);
   });
@@ -361,6 +361,60 @@ describe('bonded_release_draft', () => {
     expect(r).toMatchObject({ status: 'incomplete', docno: 'BD1' });
     expect(r.verification.reason).toMatch(/P1|P2/);
     expect(patches(world)).toEqual([]);
+  });
+
+  it('ignores an empty VAT line Priority pulls from the content, with a warning (first pilot)', async () => {
+    const world = closedWorld();
+    (world.file.IMPFILEITEMS_SUBFORM as Row[]).push({
+      KLINE: 3,
+      PARTNAME: "מע'מ",
+      TQUANT: 0,
+      TBALANCE: 0,
+    });
+    const r = await setup(world).call('bonded_release_draft', RUN);
+    expect(r).toMatchObject({ status: 'done', verified: true, docno: 'BD1' });
+    // The fake pulled the VAT line like Priority did; no quantity is written to it.
+    expect((world.releases[0].TRANSORDER_J_SUBFORM as Row[]).map((l) => l.PARTNAME)).toEqual([
+      'P1',
+      'P2',
+      "מע'מ",
+    ]);
+    expect(patches(world).map((w) => [w.path, w.body])).toEqual([
+      [LINE('BD1', 1), { TQUANT: 10 }],
+      [LINE('BD1', 2), { TQUANT: 5 }],
+    ]);
+    expect(r.warnings.join(' ')).toMatch(/מע'מ בכמות 0/);
+  });
+
+  it('a VAT line with a quantity still stops the release before any quantity is written', async () => {
+    const world = closedWorld();
+    (world.file.IMPFILEITEMS_SUBFORM as Row[]).push({
+      KLINE: 3,
+      PARTNAME: "מע'מ",
+      TQUANT: 1,
+      TBALANCE: 0,
+    });
+    const r = await setup(world).call('bonded_release_draft', RUN);
+    expect(r).toMatchObject({ status: 'incomplete', docno: 'BD1' });
+    expect(r.verification.reason).toMatch(/מע'מ/);
+    expect(patches(world)).toEqual([]);
+  });
+
+  it('a draft that holds the quantities and an empty VAT line is already done', async () => {
+    const world = closedWorld();
+    world.releases.push(
+      draftRelease({
+        TRANSORDER_J_SUBFORM: [
+          { KLINE: 1, PARTNAME: 'P1', PQUANT: 10, TQUANT: 10 },
+          { KLINE: 2, PARTNAME: 'P2', PQUANT: 5, TQUANT: 5 },
+          { KLINE: 3, PARTNAME: "מע'מ", PQUANT: 0, TQUANT: 0 },
+        ],
+      }),
+    );
+    const r = await setup(world).call('bonded_release_draft', RUN);
+    expect(r).toMatchObject({ status: 'already-done', docno: 'BD7' });
+    expect(r.warnings.join(' ')).toMatch(/מע'מ/);
+    expect(world.writes).toEqual([]);
   });
 
   it('creates nothing when the releases form answers with no rows at all', async () => {

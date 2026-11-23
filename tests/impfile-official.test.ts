@@ -216,7 +216,7 @@ describe('computeOfficialSteps', () => {
     expect(states({ ...complete, contentVatLineQty: 0 })[4]).toBe('done');
     const stage = computeOfficialSteps({ ...complete, contentVatLineQty: 1 });
     expect(stage.steps[4].state).toBe('missing');
-    expect(stage.steps[4].detail.join(' ')).toContain('לאפס');
+    expect(stage.steps[4].detail.join(' ')).toContain('למחוק');
   });
 
   it('step 6 is missing while the customs estimate does not cover the content', () => {

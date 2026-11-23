@@ -226,9 +226,15 @@ function handle(world: World, method: string, path: string, body: Row | undefine
       UDATE: '2026-01-10T10:00:00Z',
       IVNUM: null,
       ...body,
+      // Like Priority on 2026-11-23 (first pilot): a "מע'מ" line left in the content is pulled too.
       TRANSORDER_J_SUBFORM: content
-        .filter((c) => c.PARTNAME !== "מע'מ" && Number(c.TBALANCE) > 0)
-        .map((c, i) => ({ KLINE: i + 1, PARTNAME: c.PARTNAME, PQUANT: c.TBALANCE, TQUANT: 0 })),
+        .filter((c) => c.PARTNAME === "מע'מ" || Number(c.TBALANCE) > 0)
+        .map((c, i) => ({
+          KLINE: i + 1,
+          PARTNAME: c.PARTNAME,
+          PQUANT: c.PARTNAME === "מע'מ" ? Number(c.TQUANT) || 0 : c.TBALANCE,
+          TQUANT: 0,
+        })),
     };
     world.releases.push(doc);
     return json(doc, 201);
@@ -256,6 +262,14 @@ function handle(world: World, method: string, path: string, body: Row | undefine
     if (!target) return priorityError(404, 'row not found');
     Object.assign(target, body);
     return json(target);
+  }
+  if (method === 'DELETE' && segments.length === 2 && form === 'IMPFILES') {
+    const kline = keyPart(segments[1], 'KLINE');
+    const content = (world.file.IMPFILEITEMS_SUBFORM as Row[]) ?? [];
+    const at = content.findIndex((l) => String(l.KLINE) === kline);
+    if (at < 0) return priorityError(404, 'row not found');
+    content.splice(at, 1);
+    return new Response(null, { status: 204 });
   }
   throw new Error(`unexpected ${method} ${path}`);
 }

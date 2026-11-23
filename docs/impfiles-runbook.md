@@ -92,9 +92,9 @@ For each tool, in this order:
 |---|---|
 | `pinvoice_set_declaration` | every product line of the draft invoice shows the declaration number and date; the `מע'מ` line is untouched |
 | `bonded_receipt` | one receipt, status טיוטא, warehouse `BONDED` / location `0`; every line quantity equals the invoice; total equals the invoice total |
-| `bonded_fill_detail` | "תכולה במחסני ערובה" lists every product of the goods invoice with the invoice quantity; the `מע'מ` line is 0 |
+| `bonded_fill_detail` | "תכולה במחסני ערובה" lists every product of the goods invoice with the invoice quantity; there is no `מע'מ` line (if Priority refused the delete: the line is 0 and a warning says so) |
 | `impfile_run_calc` | "אומדן מכס" has a row per product, each with a country of origin; `impfile_close` shows `lastCalcViaTool` |
-| `bonded_release_draft` | one release, status טיוטא, declaration as given, quantities as requested; no second document |
+| `bonded_release_draft` | one release, status טיוטא, declaration as given, quantities as requested; no second document; no `מע'מ` line (or, if one was pulled, quantity 0 and a warning) |
 | `bonded_line_costs` | "עלויות יבוא לשורה" on every line; `lines[].totalILS` equals the screen; for a full release `reconciliation.status` is `ties` or `ties-within-rounding` |
 
 Observe and record during the pilots — Priority behaviour that could not be read in advance and
@@ -135,11 +135,14 @@ in `PILOTED` (`src/services/import-steps.ts`) in the same change:
 | Tool | Piloted on | File |
 |---|---|---|
 | `pinvoice_set_declaration` | 2026-11-23 | an open file at step 2; two lines, checked by re-read and on screen |
-| `bonded_receipt` | — | — |
-| `bonded_fill_detail` | — | — |
-| `impfile_run_calc` | — | — |
-| `bonded_release_draft` | — | — |
-| `bonded_line_costs` | — | — |
+| `bonded_receipt` | 2026-11-23 | the first pilot file (receipt as a draft, then made final in the screen). Priority pulled the carriage line `000` too and the tool wrote 1 in it; deleted by hand before final |
+| `bonded_fill_detail` | 2026-11-23 | the first pilot file, with the old behaviour (VAT line zeroed). The delete of the `מע'מ` line that replaced it has not run live yet: check on the next file that the line is gone |
+| `impfile_run_calc` | 2026-11-23 | the first pilot file; customs estimate row per product, `lastCalcViaTool` set |
+| `bonded_release_draft` | 2026-11-23 | the first pilot file. First run stopped `incomplete` on the zero `מע'מ` line Priority pulled from the content; the line was deleted by hand and the second call continued the draft. The tool now ignores such a line; not yet run live |
+| `bonded_line_costs` | 2026-11-23 | the first pilot file, on the release while a draft (first draft run in the company); costs tie by hand (foreign-currency cost invoice: automatic reconciliation `not-comparable`) |
+
+All five were piloted on one file: a single-product file, full release. `piloted` is per
+tool, not per kind of file.
 
 Known limits: country of origin is written only where the countries table is exposed to the API (it
 is not on this tenant); a partial quantity for a part that sits on several release lines is set in

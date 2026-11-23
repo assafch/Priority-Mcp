@@ -167,13 +167,15 @@ No program runs when PRIORITY_READ_ONLY=true.`;
   server.tool(
     'bonded_fill_detail',
     `שלב 5 — מילוי פירוט למחסן ערובה. Runs Priority's program "מילוי פירוט למחסן ערובה"
-(FILL_IMPFILES), which fills the file's goods content from the bonded receipt, then zeroes the
-${"מע'מ"} line the program copies from the broker invoice (it is not a product), and verifies that
-the content equals the product lines of the goods invoice, part by part.
+(FILL_IMPFILES), which fills the file's goods content from the bonded receipt, then deletes the
+${"מע'מ"} line the program copies from the broker invoice (it is not a product; a line left in the
+content, even at 0, is pulled into the release). If Priority refuses the delete, the line's quantity
+is set to 0 instead and a warning says so. Then it verifies that the content equals the product
+lines of the goods invoice, part by part.
 Refuses when: the file is closed; there is no FINAL receipt into BONDED; the content already holds
 product lines that differ from the invoice (fix in the screen — the program is not run twice).
-Content already equal → already-done. Products in place but the VAT line not yet zeroed → only
-the zeroing is done.
+Content already equal and no VAT line → already-done. Products in place but a VAT line still in
+the content → only that line is removed (on a closed file a 0 line is left, with a warning).
 ${PROGRAM_CONTRACT}
 ${COMMON}`,
     programParams,
@@ -204,7 +206,8 @@ warehouse, with the release's import declaration, and sets the quantities: the w
 bond, or the parts and quantities listed in 'quantities' (partial release; unlisted parts stay 0).
 The header is created alone; Priority pulls the lines from the file content; the pulled lines must
 equal the balance in bond, otherwise the draft is left untouched and reported as incomplete.
-The release STAYS A DRAFT. Next: bonded_line_costs on it, and only then the owner makes it final
+A ${"מע'מ"} line Priority pulls from the content with quantity 0 is not goods: it is ignored, with a
+warning (a ${"מע'מ"} line with a quantity stops the step). The release STAYS A DRAFT. Next: bonded_line_costs on it, and only then the owner makes it final
 (SOP LBI2400656, ד׳ 13–15). This tool never writes a status, a flag or a cost.
 Refuses when: the file is not closed; nothing is left in bond; another open draft release exists
 for the file (an open draft with the SAME declaration is continued); a linked invoice is still

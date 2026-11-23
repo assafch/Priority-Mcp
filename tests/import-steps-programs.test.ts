@@ -94,7 +94,7 @@ describe.each([
   it('previews without logging into the Web SDK', async () => {
     const t = setup(ready());
     const r = await t.call(tool, { impfnum: 'IM1' });
-    expect(r).toMatchObject({ status: 'preview', piloted: false, program });
+    expect(r).toMatchObject({ status: 'preview', piloted: true, program });
     expect(t.sessions()).toBe(0);
     expect(t.fake.calls).toEqual([]);
   });
@@ -223,7 +223,7 @@ describe('bonded_fill_detail', () => {
     expect(t.fake.calls).toEqual([]);
   });
 
-  it('runs the program, zeroes the VAT line it copied, and verifies the content', async () => {
+  it('runs the program, deletes the VAT line it copied, and verifies the content', async () => {
     const world = receivedWorld();
     const t = setup(world, {
       ...SDK,
@@ -237,12 +237,10 @@ describe('bonded_fill_detail', () => {
       'activateStart(FILL_IMPFILES,P)',
     ]);
     expect(world.writes).toEqual([
-      {
-        method: 'PATCH',
-        path: "IMPFILES('IM1')/IMPFILEITEMS_SUBFORM(KLINE=3)",
-        body: { TQUANT: 0 },
-      },
+      { method: 'DELETE', path: "IMPFILES('IM1')/IMPFILEITEMS_SUBFORM(KLINE=3)", body: {} },
     ]);
+    expect(world.file.IMPFILEITEMS_SUBFORM).toEqual(CONTENT);
+    expect(r.warnings).toEqual([]);
     expect(t.ledger().map((l) => l.phase)).toEqual(['in_flight', 'done']);
   });
 
@@ -260,7 +258,7 @@ describe('bonded_fill_detail', () => {
     expect(t.ledger().at(-1)?.phase).toBe('unverified');
   });
 
-  it('zeroes every VAT line, not only the first one', async () => {
+  it('deletes every VAT line, also one already at 0 (a release would pull it in)', async () => {
     const world = receivedWorld();
     world.file.IMPFILEITEMS_SUBFORM = [
       ...copy(CONTENT),
@@ -270,9 +268,11 @@ describe('bonded_fill_detail', () => {
     const t = setup(world);
     const r = await t.call('bonded_fill_detail', RUN);
     expect(r.status).toBe('done');
-    expect(world.writes.map((w) => w.path)).toEqual([
-      "IMPFILES('IM1')/IMPFILEITEMS_SUBFORM(KLINE=4)",
+    expect(world.writes.map((w) => `${w.method} ${w.path}`)).toEqual([
+      "DELETE IMPFILES('IM1')/IMPFILEITEMS_SUBFORM(KLINE=3)",
+      "DELETE IMPFILES('IM1')/IMPFILEITEMS_SUBFORM(KLINE=4)",
     ]);
+    expect(world.file.IMPFILEITEMS_SUBFORM).toEqual(CONTENT);
   });
 
   it('passes on what the program said at its end when the content is right', async () => {
@@ -289,14 +289,71 @@ describe('bonded_fill_detail', () => {
     expect(r.warnings.join(' ')).toMatch(/חלק מהשורות דולגו/);
   });
 
-  it('only zeroes the VAT line when the products are already in place', async () => {
+  it('only deletes the VAT line when the products are already in place', async () => {
     const world = receivedWorld();
     world.file.IMPFILEITEMS_SUBFORM = [...copy(CONTENT), VAT_LINE(1)];
     const t = setup(world);
     const r = await t.call('bonded_fill_detail', RUN);
     expect(r.status).toBe('done');
     expect(t.fake.count('activateStart')).toBe(0);
-    expect(world.writes.map((w) => w.body)).toEqual([{ TQUANT: 0 }]);
+    expect(world.writes.map((w) => w.method)).toEqual(['DELETE']);
+  });
+
+  it('removes a VAT line left at 0 by the old zeroing (first pilot)', async () => {
+    const world = receivedWorld();
+    world.file.IMPFILEITEMS_SUBFORM = [...copy(CONTENT), VAT_LINE(0)];
+    const t = setup(world);
+    const preview = await t.call('bonded_fill_detail', { ...RUN, dryRun: true });
+    expect(preview.status).toBe('preview');
+    expect(preview.wouldSend).toEqual([
+      expect.objectContaining({ method: 'DELETE', endpoint: expect.stringContaining('KLINE=3') }),
+    ]);
+    expect(world.writes).toEqual([]);
+    const r = await t.call('bonded_fill_detail', RUN);
+    expect(r.status).toBe('done');
+    expect(world.writes.map((w) => w.method)).toEqual(['DELETE']);
+    expect(world.file.IMPFILEITEMS_SUBFORM).toEqual(CONTENT);
+  });
+
+  it('zeroes the VAT line instead when Priority refuses the delete, and says so', async () => {
+    const world = receivedWorld();
+    world.file.IMPFILEITEMS_SUBFORM = [...copy(CONTENT), VAT_LINE(1)];
+    world.intercept = (method) =>
+      method === 'DELETE'
+        ? new Response(JSON.stringify({ error: { message: 'אין הרשאה למחוק' } }), { status: 403 })
+        : undefined;
+    const t = setup(world);
+    const r = await t.call('bonded_fill_detail', RUN);
+    expect(r.status).toBe('done');
+    expect(r.sent.map((w: { method: string }) => w.method)).toEqual(['PATCH']);
+    expect(world.writes.map((w) => `${w.method} ${w.path}`)).toEqual([
+      "PATCH IMPFILES('IM1')/IMPFILEITEMS_SUBFORM(KLINE=3)",
+    ]);
+    expect(world.file.IMPFILEITEMS_SUBFORM).toEqual([...CONTENT, VAT_LINE(0)]);
+    expect(r.warnings.join(' ')).toMatch(/דחה את מחיקת שורת מע'מ/);
+  });
+
+  it('leaves a refused delete of a 0 VAT line as it is, with a warning', async () => {
+    const world = receivedWorld();
+    world.file.IMPFILEITEMS_SUBFORM = [...copy(CONTENT), VAT_LINE(0)];
+    world.intercept = (method) =>
+      method === 'DELETE' ? new Response('{}', { status: 403 }) : undefined;
+    const t = setup(world);
+    const r = await t.call('bonded_fill_detail', RUN);
+    expect(r.status).toBe('done');
+    expect(r.sent).toEqual([]);
+    expect(r.warnings.join(' ')).toMatch(/bonded_release_draft מתעלם ממנה/);
+  });
+
+  it('on a closed file a VAT line at 0 is left alone: already-done with a warning', async () => {
+    const world = receivedWorld();
+    world.file.CLOSED = 'Y';
+    world.file.IMPFILEITEMS_SUBFORM = [...copy(CONTENT), VAT_LINE(0)];
+    const t = setup(world);
+    const r = await t.call('bonded_fill_detail', RUN);
+    expect(r.status).toBe('already-done');
+    expect(r.warnings.join(' ')).toMatch(/התיק סגור/);
+    expect(world.writes).toEqual([]);
   });
 
   it('refuses content that differs from the invoice instead of running again', async () => {
