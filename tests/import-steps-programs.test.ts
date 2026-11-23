@@ -463,7 +463,7 @@ describe('impfile_run_calc', () => {
     expect(guide.instruction).toContain('impfile_run_calc');
     const close = await t.call('impfile_close', { impfnum: 'IM1' });
     expect(close.readyToClose).toBe(true);
-    expect(close.nextStep).toMatch(/impfile_run_calc.*הבעלים.*סגירת התיק/);
+    expect(close.nextStep).toMatch(/impfile_run_calc.*impfile_close_run.*סגירת התיק.*הבעלים/);
   });
 
   it('is shown by impfile_close and impfile_preflight as lastCalcViaTool', async () => {

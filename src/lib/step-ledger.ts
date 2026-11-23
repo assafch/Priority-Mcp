@@ -1,7 +1,7 @@
 import { closeSync, mkdirSync, openSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PhaseBStep } from './import-step-gates.js';
+import type { ImportStep } from './import-step-gates.js';
 import { appendLedger } from './invoice-close.js';
 
 /**
@@ -31,9 +31,15 @@ export type StepPhase =
   /** a document was created but not completed; the next call continues it */
   | 'incomplete';
 
+/**
+ * A ledger step: one of the official steps, or 'fileChange' — a header, invoice-link or allocation
+ * write by the impfile_* tools, recorded so the close sees that the loading calc is stale.
+ */
+export type LedgerStep = ImportStep | 'fileChange';
+
 export interface StepRecord {
   impfnum: string;
-  step: PhaseBStep;
+  step: LedgerStep;
   phase: StepPhase;
   docno?: string;
   detail?: unknown;
@@ -51,7 +57,7 @@ export function recordStep(path: string, record: StepRecord): void {
 export function lastRecord(
   path: string,
   impfnum: string,
-  step: PhaseBStep,
+  step: ImportStep,
 ): { t: number; phase: string; docno?: string } | null {
   let text: string;
   try {
@@ -75,8 +81,40 @@ export function lastRecord(
   return null;
 }
 
+/** Time (ms) of the newest confirmed run of this step on this file, or null. */
+export function lastDoneTime(path: string, impfnum: string, step: ImportStep): number | null {
+  const at = lastDoneAt(path, impfnum, step);
+  return at ? Date.parse(at) : null;
+}
+
+/** Every record of this file written after `afterT` (ms), oldest first. A damaged line is skipped. */
+export function recordsAfter(
+  path: string,
+  impfnum: string,
+  afterT: number,
+): Array<{ t: number; step: string; phase: string }> {
+  let text: string;
+  try {
+    text = readFileSync(path, 'utf8');
+  } catch {
+    return [];
+  }
+  const found: Array<{ t: number; step: string; phase: string }> = [];
+  for (const line of text.split('\n')) {
+    try {
+      const rec = JSON.parse(line) as Partial<StepRecord> & { t?: unknown };
+      if (rec.impfnum !== impfnum || typeof rec.t !== 'number' || rec.t <= afterT) continue;
+      if (typeof rec.step !== 'string' || typeof rec.phase !== 'string') continue;
+      found.push({ t: rec.t, step: rec.step, phase: rec.phase });
+    } catch {
+      // blank or damaged line
+    }
+  }
+  return found;
+}
+
 /** Time (ISO) of the newest confirmed run of this step on this file, or null. */
-export function lastDoneAt(path: string, impfnum: string, step: PhaseBStep): string | null {
+export function lastDoneAt(path: string, impfnum: string, step: ImportStep): string | null {
   let text: string;
   try {
     text = readFileSync(path, 'utf8');
@@ -101,12 +139,13 @@ export function lastDoneAt(path: string, impfnum: string, step: PhaseBStep): str
 export function cooldownReason(
   path: string,
   impfnum: string,
-  step: PhaseBStep,
+  step: ImportStep,
   now: number = Date.now(),
+  windowMs: number = STEP_COOLDOWN_MS,
 ): string | null {
   const last = lastRecord(path, impfnum, step);
   if (!last || !COOLING.has(last.phase)) return null;
-  const until = last.t + STEP_COOLDOWN_MS;
+  const until = last.t + windowMs;
   if (now >= until) return null;
   return `הצעד ${step} בתיק ${impfnum} נשלח ב-${new Date(last.t).toISOString()} והתוצאה שלו עדיין לא אומתה (${last.phase}). לא שולחים שוב לפני ${new Date(until).toISOString()}; קוראים את התיק מחדש ובודקים מה נרשם.`;
 }
@@ -117,7 +156,8 @@ export function cooldownReason(
  * and the record) but not between processes on the same machine: two could both read "nothing
  * sent" and both append. Creating the claim file with O_EXCL is atomic, so only one proceeds.
  *
- * A claim older than the cooldown belongs to a caller that died and is taken over. Servers on
+ * A claim older than the window (default: the cooldown) belongs to a caller that died and is taken
+ * over. A step whose run can last longer than the cooldown passes a longer window. Servers on
  * different machines do not share this file; between them only the re-read of what already
  * exists in Priority, right before the write, protects.
  */
@@ -126,8 +166,9 @@ export type StepClaim = { ok: true; release: () => void } | { ok: false; reason:
 export function claimStep(
   ledgerPath: string,
   impfnum: string,
-  step: PhaseBStep,
+  step: ImportStep,
   now: number = Date.now(),
+  windowMs: number = STEP_COOLDOWN_MS,
 ): StepClaim {
   const dir = join(dirname(ledgerPath), 'import-step-claims');
   const file = join(dir, `${impfnum.replace(/[^A-Za-z0-9_-]/g, '_')}.${step}.claim`);
@@ -150,7 +191,7 @@ export function claimStep(
     } catch {
       heldSince = undefined; // unreadable or just removed: treat as stale and try once more
     }
-    if (typeof heldSince === 'number' && now - heldSince < STEP_COOLDOWN_MS) {
+    if (typeof heldSince === 'number' && now - heldSince < windowMs) {
       return {
         ok: false,
         reason: `הצעד ${step} בתיק ${impfnum} מבוצע כרגע על ידי קריאה אחרת (מאז ${new Date(heldSince).toISOString()}). לא שולחים במקביל; קוראים את התיק מחדש בעוד כמה דקות.`,

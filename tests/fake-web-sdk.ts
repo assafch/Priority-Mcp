@@ -41,6 +41,12 @@ export interface FakeSdkOptions {
   /** activateStart never settles. */
   hangActivate?: boolean;
   hangCancel?: boolean;
+  /** Steps of a procedure started with procStart (the costing program): procSteps[0] answers it. */
+  procSteps?: WebSdkProcStep[];
+  /** Called when procStart runs. */
+  onProcStart?: () => void;
+  /** Called on every proc.message(ok), after the cursor moved (e.g. the run after the OK). */
+  onProcMessage?: (ok: 0 | 1) => void;
 }
 
 export function fakeSdk(opts: FakeSdkOptions = {}) {
@@ -48,11 +54,13 @@ export function fakeSdk(opts: FakeSdkOptions = {}) {
   const steps = opts.steps ?? [{ type: 'end' }];
   const rows: Record<string, WebSdkRow> = opts.rows ?? {};
   let cursor = 0;
+  let active = steps;
   const proc = {
     message: vi.fn(async (ok: 0 | 1) => {
       calls.push(`message(${ok})`);
       cursor++;
-      return { ...steps[cursor], proc } as WebSdkProcStep;
+      if (active !== steps) opts.onProcMessage?.(ok);
+      return { ...active[cursor], proc } as WebSdkProcStep;
     }),
     cancel: vi.fn(async () => {
       calls.push('cancel');
@@ -91,6 +99,7 @@ export function fakeSdk(opts: FakeSdkOptions = {}) {
           if (opts.hangActivate) return new Promise<WebSdkProcStep>(() => {});
           opts.onActivate?.();
           cursor = 0;
+          active = steps;
           return { ...steps[0], proc } as WebSdkProcStep;
         }),
         activateEnd: vi.fn(async () => {
@@ -103,6 +112,13 @@ export function fakeSdk(opts: FakeSdkOptions = {}) {
       for (const m of opts.openMessages ?? [])
         (onMessage as (msg: unknown) => void)({ ...m, form });
       return form;
+    }),
+    procStart: vi.fn(async (name: string, type: string) => {
+      calls.push(`procStart(${name},${type})`);
+      opts.onProcStart?.();
+      cursor = 0;
+      active = opts.procSteps ?? [{ type: 'end' }];
+      return { ...active[0], proc } as WebSdkProcStep;
     }),
   };
   const session = new WebSdkSession(sdk, fakeLoginConfig);

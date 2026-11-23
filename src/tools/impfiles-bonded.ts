@@ -124,8 +124,8 @@ warehouse can be TYPE='D' without being bonded (e.g. the main warehouse) — BON
     `קבלת סחורה למחסן ערובה (spec §Phase 5). READ-ONLY GUIDE — does NOT receive anything.
 
 The step itself is done by bonded_receipt, which creates the receipt as a DRAFT (warehouse BONDED,
-location 0, invoice quantities); making the receipt final stays with the owner, in the screen "קבלות
-סחורה מספק". This guide only explains the step and reads back the file; results carry "mutates":
+location 0, invoice quantities); bonded_receipt_finalize makes it final, with the owner's approval
+code from its own preview. This guide only explains the step and reads back the file; results carry "mutates":
 false. Receiving into the bonded holding
 location keeps the goods OUT of inventory value until release (LBI2400656), and CLOSES the PO balance
 even before release. Returns the step guidance + a read-back of the file's goods content.`,
@@ -138,8 +138,10 @@ even before release. Returns the step guidance + a read-back of the file's goods
           impfnum: p.impfnum,
           step: 'bonded receipt (קבלת סחורה למחסן ערובה)',
           tool: 'bonded_receipt',
-          doneBy: 'bonded_receipt (creates the draft receipt); the owner makes it final',
-          stillManual: 'הבעלים: שינוי סטטוס הקבלה לסופית במסך "קבלות סחורה מספק".',
+          doneBy:
+            "bonded_receipt (creates the draft receipt); bonded_receipt_finalize makes it final with the owner's approval code",
+          stillManual:
+            "הבעלים: מאשר בצ'אט את התצוגה המקדימה של bonded_receipt_finalize לפני שהקבלה הופכת לסופית.",
           screenAction: 'קבלות סחורה מספק (מחסן BONDED, איתור 0)',
           warehouse: file.WARHSNAME ?? null,
           instructions: [
@@ -178,7 +180,7 @@ the file's goods content; results carry "mutates": false.`,
           screenAction: 'מילוי פירוט למחסן ערובה',
           instructions: [
             'bonded_fill_detail runs "מילוי פירוט למחסן ערובה" and verifies the content against the goods invoice.',
-            'Next: impfile_run_calc ("חישוב העמסה"), check readiness with impfile_close, then the owner closes the file in the screen ("סגירת התיק"), then bonded_release_draft.',
+            'Next: impfile_run_calc ("חישוב העמסה"), check readiness with impfile_close, then impfile_close_run ("סגירת התיק", after the owner approves its preview), then bonded_release_draft.',
           ],
           readback: goodsReadback(file.IMPFILEITEMS_SUBFORM),
         });
@@ -193,8 +195,8 @@ the file's goods content; results carry "mutates": false.`,
     `שחרור מהמחסן ערובה (קבלות סחורה ממחסן ערובה, spec §Phase 5). READ-ONLY GUIDE — releases nothing.
 
 The draft release is created by bonded_release_draft (header + quantities, no status) and its
-per-line costs by bonded_line_costs; making the release final stays with the owner, in the screen
-"קבלות סחורה ממחסן ערובה" (the server blocks every other write to a release). This guide only
+per-line costs by bonded_line_costs; bonded_release_finalize makes it final, with the owner's
+approval code from its own preview (the server blocks every other write to a release). This guide only
 explains and reads back; results carry "mutates": false. Release is done on the customs (מכס) part only, against a rishumon (declaration),
 with released quantities (partial supported), the customs-broker invoice, the per-line import costs,
 and the additional-costs %. The FILE MUST BE CLOSED before release. Per the SOP (LBI2400656 ד׳
@@ -210,7 +212,7 @@ mandatory order are proven).`,
         ]);
         const closedGate = fileClosedWarning(
           file,
-          'File is not closed — it must be closed in the screen ("סגירת התיק") before releasing from the bonded warehouse.',
+          'File is not closed — it must be closed ("סגירת התיק", impfile_close_run) before releasing from the bonded warehouse.',
         );
         return textResult({
           mutates: false,
@@ -218,9 +220,9 @@ mandatory order are proven).`,
           step: 'bonded release (קבלות סחורה ממחסן ערובה)',
           tool: 'bonded_release_draft',
           doneBy:
-            'bonded_release_draft (draft + quantities), then bonded_line_costs; the owner makes it final',
+            "bonded_release_draft (draft + quantities), then bonded_line_costs; bonded_release_finalize makes it final with the owner's approval code",
           stillManual:
-            'הבעלים: שינוי סטטוס תעודת השחרור לסופית במסך "קבלות סחורה ממחסן ערובה", אחרי בדיקת העלויות לשורה. מספר משטח ואחוז עלויות נוספות אינם נכתבים על ידי הכלים.',
+            "הבעלים: מאשר בצ'אט את התצוגה המקדימה של bonded_release_finalize (תעודת השחרור לסופית), אחרי בדיקת העלויות לשורה. מספר משטח ואחוז עלויות נוספות אינם נכתבים על ידי הכלים.",
           screenAction: 'קבלות סחורה ממחסן ערובה',
           fileClosed: closedGate.fileClosed,
           // An open file lists what is still missing before the close; a closed one only the gate.

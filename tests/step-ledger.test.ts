@@ -7,8 +7,10 @@ import {
   STEP_COOLDOWN_MS,
   claimStep,
   cooldownReason,
+  lastDoneTime,
   lastRecord,
   recordStep,
+  recordsAfter,
 } from '../src/lib/step-ledger.js';
 
 /**
@@ -100,5 +102,42 @@ describe('step ledger', () => {
     expect(() =>
       recordStep(join(file, 'steps.jsonl'), { impfnum: 'IM1', step: 'calc', phase: 'in_flight' }),
     ).toThrow();
+  });
+});
+
+describe('step ledger: phase C helpers', () => {
+  const ledger = () => join(mkdtempSync(join(tmpdir(), 'ledger-')), 'steps.jsonl');
+
+  it('recordsAfter lists only the later records of that file', () => {
+    const path = ledger();
+    writeFileSync(
+      path,
+      [
+        { t: 100, impfnum: 'IM1', step: 'calc', phase: 'done' },
+        { t: 200, impfnum: 'IM2', step: 'fillDetail', phase: 'done' },
+        'not json',
+        { t: 300, impfnum: 'IM1', step: 'fillDetail', phase: 'done' },
+      ]
+        .map((r) => (typeof r === 'string' ? r : JSON.stringify(r)))
+        .join('\n'),
+    );
+    expect(recordsAfter(path, 'IM1', 100)).toEqual([{ t: 300, step: 'fillDetail', phase: 'done' }]);
+    expect(lastDoneTime(path, 'IM1', 'calc')).toBe(100);
+    expect(lastDoneTime(path, 'IM1', 'close')).toBeNull();
+  });
+
+  it('a longer window keeps a claim and a cooldown alive past the default', () => {
+    const path = ledger();
+    const t0 = 1_000_000;
+    const first = claimStep(path, 'COMPANY', 'costing', t0, 600_000);
+    expect(first.ok).toBe(true);
+    const late = t0 + STEP_COOLDOWN_MS + 60_000;
+    expect(claimStep(path, 'COMPANY', 'costing', late, 600_000).ok).toBe(false);
+    recordStep(path, { impfnum: 'COMPANY', step: 'costing', phase: 'in_flight' });
+    const t = Date.now();
+    expect(cooldownReason(path, 'COMPANY', 'costing', t + STEP_COOLDOWN_MS + 1)).toBeNull();
+    expect(cooldownReason(path, 'COMPANY', 'costing', t + STEP_COOLDOWN_MS + 1, 600_000)).toContain(
+      'costing',
+    );
   });
 });

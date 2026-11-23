@@ -118,7 +118,7 @@ ${COMMON}`,
 and sets every line to the invoice quantity. The header is created alone (date, supplier, BONDED/0,
 invoice, currency); Priority pulls the lines from the invoice; the pulled lines must equal the
 invoice's product lines part by part, otherwise the draft is left untouched and reported as
-incomplete. The receipt STAYS A DRAFT: the owner makes it final in the screen.
+incomplete. The receipt STAYS A DRAFT: bonded_receipt_finalize makes it final (owner's approval code).
 Refuses when: the file is closed or its warehouse is not BONDED; a goods invoice is still temporary;
 the existing receipts could not be read; the date is in the future; an earlier create is still
 unconfirmed (180 s). An existing final receipt → already-done. An existing draft → continued.
@@ -191,7 +191,7 @@ so a second run is allowed (never "already-done"). The result carries ranAt; imp
 impfile_preflight show the last confirmed run as lastCalcViaTool.
 Refuses when: the file is closed; an invoice is still temporary; there is no final receipt into
 BONDED; the content is empty or still holds a non-zero ${"מע'מ"} line.
-The close itself ("סגירת התיק") stays with the owner.
+The close itself ("סגירת התיק") is impfile_close_run, with the owner's approval code.
 ${PROGRAM_CONTRACT}
 ${COMMON}`,
     programParams,
@@ -207,7 +207,7 @@ bond, or the parts and quantities listed in 'quantities' (partial release; unlis
 The header is created alone; Priority pulls the lines from the file content; the pulled lines must
 equal the balance in bond, otherwise the draft is left untouched and reported as incomplete.
 A ${"מע'מ"} line Priority pulls from the content with quantity 0 is not goods: it is ignored, with a
-warning (a ${"מע'מ"} line with a quantity stops the step). The release STAYS A DRAFT. Next: bonded_line_costs on it, and only then the owner makes it final
+warning (a ${"מע'מ"} line with a quantity stops the step). The release STAYS A DRAFT. Next: bonded_line_costs on it, and only then bonded_release_finalize makes it final
 (SOP LBI2400656, ד׳ 13–15). This tool never writes a status, a flag or a cost.
 Refuses when: the file is not closed; nothing is left in bond; another open draft release exists
 for the file (an open draft with the SAME declaration is continued); a linked invoice is still

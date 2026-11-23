@@ -6,18 +6,11 @@ import type { Config } from '../config.js';
 import {
   FINAL_DOC_STATUS,
   buildCostReport,
-  computeCostingReadiness,
   computeOfficialSteps,
   lineIsCosted,
 } from '../lib/impfile-official.js';
 import { textResult } from '../lib/write-guard.js';
-import {
-  loadFileFacts,
-  loadPartCosts,
-  readClosedByFile,
-  readLastCostingAt,
-  scanReleases,
-} from '../services/import-facts.js';
+import { loadCostingReadiness, loadFileFacts, loadPartCosts } from '../services/import-facts.js';
 
 /**
  * The end of the import-file process as Priority's SOP defines it (LBI2400273, "תוצאות"): after
@@ -134,7 +127,7 @@ or after 'since' (default: the last 365 days) and reports:
   • ambiguousFiles — the change and the last costing run carry the same minute, so their order
     cannot be told (Priority timestamps have minute resolution); another costing run settles it.
   • draftReleases — releases not yet final (not costed until they are).
-This tool never runs the costing program.`,
+This tool never runs the costing program; costing_run does, with the owner's approval code.`,
     {
       since: z
         .string()
@@ -144,14 +137,8 @@ This tool never runs the costing program.`,
     },
     async (p) => {
       try {
-        const since =
-          p.since ?? new Date(Date.now() - 365 * 24 * 3600 * 1000).toISOString().slice(0, 10);
-        const [scan, closedByFile, lastCostingAt] = await Promise.all([
-          scanReleases(client, since),
-          readClosedByFile(client),
-          readLastCostingAt(client),
-        ]);
-        if (lastCostingAt === undefined) {
+        const { since, readiness } = await loadCostingReadiness(client, p.since);
+        if (!readiness) {
           return textResult({
             mutates: false,
             since,
@@ -160,16 +147,7 @@ This tool never runs the costing program.`,
             blockers: ['לא ניתן היה לקרוא את יומן התמחיר (COSTINGLOG).'],
           });
         }
-        return textResult({
-          mutates: false,
-          since,
-          ...computeCostingReadiness({
-            releases: scan.releases,
-            scanComplete: scan.complete,
-            closedByFile,
-            lastCostingAt,
-          }),
-        });
+        return textResult({ mutates: false, since, ...readiness });
       } catch (err) {
         throw toMcpError(err);
       }

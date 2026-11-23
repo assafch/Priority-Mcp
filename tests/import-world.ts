@@ -52,6 +52,15 @@ export interface World {
    * live on 2026-11-23, when a form's reads came back empty although its documents existed.
    */
   blind?: string[];
+  /** COSTINGLOG rows, newest first (default none). */
+  costingLog?: Row[];
+  /**
+   * Stock per part and "warehouse/location" (LOGPART/PARTBALANCE_SUBFORM). A receipt or release
+   * that becomes final moves its line quantities like Priority does.
+   */
+  stock?: Record<string, Record<string, number>>;
+  /** Do not move stock when a document becomes final (to model a mismatch). */
+  frozenStock?: boolean;
   writes: Write[];
   gets: string[];
 }
@@ -162,8 +171,25 @@ function handle(world: World, method: string, path: string, body: Row | undefine
     world.gets.push(path);
     if (world.blind?.includes(form)) return json({ value: [] });
     if (BACKGROUND[form] && !path.includes('$filter')) return json({ value: [BACKGROUND[form]] });
+    if (form === 'IMPFILES' && !segments[0].includes('(')) {
+      return json({
+        value: [
+          { IMPFNUM: world.file.IMPFNUM, CLOSED: world.file.CLOSED, STATDES: world.file.STATDES },
+        ],
+      });
+    }
     if (form === 'IMPFILES') return json(world.file);
-    if (form === 'COSTINGLOG') return json({ value: [] });
+    if (form === 'COSTINGLOG') return json({ value: world.costingLog ?? [] });
+    if (form === 'LOGPART' && segments[1] === 'PARTBALANCE_SUBFORM') {
+      const part = segments[0].match(/'([^']*)'/)?.[1] ?? '';
+      const byPlace = world.stock?.[part] ?? {};
+      return json({
+        value: Object.entries(byPlace).map(([at, balance]) => {
+          const [WARHSNAME, LOCNAME] = at.split('/');
+          return { WARHSNAME, LOCNAME, BALANCE: balance };
+        }),
+      });
+    }
     if (form === 'COUNTRIES') {
       if (world.countries === 'blocked') return priorityError(400, 'לא ניתן להפעיל API למסך זה.');
       const wanted = quoted(path, 'COUNTRYNAME');
@@ -238,6 +264,39 @@ function handle(world: World, method: string, path: string, body: Row | undefine
     };
     world.releases.push(doc);
     return json(doc, 201);
+  }
+  if (
+    method === 'PATCH' &&
+    segments.length === 1 &&
+    (form === 'DOCUMENTS_P' || form === 'DOCUMENTS_J')
+  ) {
+    const list = form === 'DOCUMENTS_P' ? world.receipts : world.releases;
+    const doc = list.find((r) => r.DOCNO === keyPart(segments[0], 'DOCNO'));
+    if (!doc) return priorityError(404, 'row not found');
+    const becomesFinal = body?.STATDES === 'סופית' && doc.STATDES !== 'סופית';
+    Object.assign(doc, body, { UDATE: '2026-01-21T09:00:00Z' });
+    if (becomesFinal && !world.frozenStock) {
+      world.stock ??= {};
+      const stock = world.stock;
+      const move = (part: string, at: string, qty: number) => {
+        stock[part] ??= {};
+        stock[part][at] = (stock[part][at] ?? 0) + qty;
+      };
+      const lines =
+        (doc[form === 'DOCUMENTS_P' ? 'TRANSORDER_P_SUBFORM' : 'TRANSORDER_J_SUBFORM'] as Row[]) ??
+        [];
+      for (const l of lines) {
+        const qty = Number(l.TQUANT) || 0;
+        const part = String(l.PARTNAME);
+        if (form === 'DOCUMENTS_P')
+          move(part, `${String(doc.TOWARHSNAME)}/${String(doc.TOLOCNAME ?? '0')}`, qty);
+        else {
+          move(part, 'BONDED/0', -qty);
+          move(part, `${String(doc.TOWARHSNAME ?? 'Main')}/${String(doc.TOLOCNAME ?? '0')}`, qty);
+        }
+      }
+    }
+    return json(doc);
   }
   if (method === 'PATCH' && segments.length === 2) {
     const kline = keyPart(segments[1], 'KLINE');
