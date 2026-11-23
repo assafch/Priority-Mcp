@@ -90,7 +90,6 @@ describe('pinvoice_set_declaration', () => {
     const world = draftInvoiceWorld();
     const r = await setup(world).call('pinvoice_set_declaration', DECL);
     expect(r.status).toBe('preview');
-    expect(r.piloted).toBe(false);
     expect(world.writes).toEqual([]);
     expect(r.wouldSend).toEqual([
       {
@@ -271,6 +270,35 @@ describe('pinvoice_set_declaration', () => {
     expect(r.status).toBe('refused');
     expect(r.reasons.join(' ')).toMatch(/לא ניתן היה לקרוא/);
     expect(world.writes).toEqual([]);
+  });
+
+  it('says blocked, not "not found", when the invoices form answers with no rows', async () => {
+    const world = draftInvoiceWorld();
+    world.blind = ['PINVOICES'];
+    const r = await setup(world).call('pinvoice_set_declaration', DECL);
+    expect(r.status).toBe('blocked');
+    expect(r.reasons.join(' ')).toMatch(/PINVOICES/);
+    expect(r.reasons.join(' ')).not.toMatch(/לא נמצאה/);
+    expect(world.writes).toEqual([]);
+  });
+
+  it('still says "not found" when the form answers but the invoice is missing', async () => {
+    const world = draftInvoiceWorld();
+    world.pinvoices = [];
+    const r = await setup(world).call('pinvoice_set_declaration', DECL);
+    expect(r.status).toBe('refused');
+    expect(r.reasons.join(' ')).toMatch(/לא נמצאה/);
+  });
+
+  it('is marked as piloted; the steps not yet piloted are not', async () => {
+    const world = draftInvoiceWorld();
+    const r = await setup(world).call('pinvoice_set_declaration', DECL);
+    expect(r.piloted).toBe(true);
+    const receipt = await setup(openWorld()).call('bonded_receipt', {
+      impfnum: 'IM1',
+      date: '2026-01-10',
+    });
+    expect(receipt.piloted).toBe(false);
   });
 });
 
@@ -577,6 +605,57 @@ describe('bonded_receipt', () => {
     const r = await setup(world).call('bonded_receipt', { ...RECEIPT, dryRun: false });
     expect(r).toMatchObject({ status: 'incomplete', docno: 'GR7' });
     expect(r.verification.reason).toMatch(/140.*150|150.*140/);
+  });
+
+  it('creates nothing when the receipts form answers with no rows at all', async () => {
+    const world = openWorld();
+    world.receipts.push({
+      DOCNO: 'GR7',
+      TYPE: 'P',
+      STATDES: 'טיוטא',
+      TOWARHSNAME: 'BONDED',
+      IVNUM: 'GI1',
+      TOTPRICE: 150,
+      TRANSORDER_P_SUBFORM: [
+        { KLINE: 1, PARTNAME: 'P1', PQUANT: 10, TQUANT: 10 },
+        { KLINE: 2, PARTNAME: 'P2', PQUANT: 5, TQUANT: 0 },
+      ],
+    });
+    world.blind = ['DOCUMENTS_P']; // the draft exists, but every read comes back empty
+    const t = setup(world);
+    const r = await t.call('bonded_receipt', { ...RECEIPT, dryRun: false });
+    expect(r.status).toBe('blocked');
+    expect(r.reasons.join(' ')).toMatch(/DOCUMENTS_P/);
+    expect(world.writes).toEqual([]);
+    expect(world.receipts).toHaveLength(1);
+    // nothing was sent, so no cooldown: once reads work again the same draft is continued
+    world.blind = undefined;
+    const again = await t.call('bonded_receipt', { ...RECEIPT, dryRun: false });
+    expect(again).toMatchObject({ status: 'done', docno: 'GR7' });
+    expect(posts(world)).toEqual([]);
+  });
+
+  it('a blocked create leaves no cooldown: the next call creates the receipt', async () => {
+    const world = openWorld();
+    world.blind = ['DOCUMENTS_P'];
+    const t = setup(world);
+    const r = await t.call('bonded_receipt', { ...RECEIPT, dryRun: false });
+    expect(r.status).toBe('blocked');
+    expect(world.writes).toEqual([]);
+    expect(t.ledger().map((l) => l.phase)).toEqual(['in_flight', 'failed']);
+    world.blind = undefined;
+    const again = await t.call('bonded_receipt', { ...RECEIPT, dryRun: false });
+    expect(again).toMatchObject({ status: 'done', docno: 'GR1' });
+    expect(posts(world)).toHaveLength(1);
+  });
+
+  it('says blocked, not "not found", when the invoices form answers with no rows', async () => {
+    const world = openWorld();
+    world.blind = ['PINVOICES'];
+    const r = await setup(world).call('bonded_receipt', { ...RECEIPT, dryRun: false });
+    expect(r.status).toBe('blocked');
+    expect(r.reasons.join(' ')).toMatch(/PINVOICES/);
+    expect(world.writes).toEqual([]);
   });
 
   it('refuses when the existing receipts cannot be read', async () => {

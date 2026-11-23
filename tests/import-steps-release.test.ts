@@ -363,6 +363,36 @@ describe('bonded_release_draft', () => {
     expect(patches(world)).toEqual([]);
   });
 
+  it('creates nothing when the releases form answers with no rows at all', async () => {
+    const world = closedWorld();
+    world.releases.push(draftRelease());
+    world.blind = ['DOCUMENTS_J']; // the draft exists, but every read comes back empty
+    const t = setup(world);
+    const r = await t.call('bonded_release_draft', RUN);
+    expect(r.status).toBe('blocked');
+    expect(r.reasons.join(' ')).toMatch(/DOCUMENTS_J/);
+    expect(world.writes).toEqual([]);
+    expect(world.releases).toHaveLength(1);
+    // nothing was sent, so no cooldown: once reads work again the same draft is continued
+    world.blind = undefined;
+    const again = await t.call('bonded_release_draft', RUN);
+    expect(again).toMatchObject({ status: 'done', docno: 'BD7' });
+    expect(posts(world)).toEqual([]);
+  });
+
+  it('a blocked create leaves no cooldown: the next call creates the release', async () => {
+    const world = closedWorld();
+    world.blind = ['DOCUMENTS_J'];
+    const t = setup(world);
+    const r = await t.call('bonded_release_draft', RUN);
+    expect(r.status).toBe('blocked');
+    expect(world.writes).toEqual([]);
+    world.blind = undefined;
+    const again = await t.call('bonded_release_draft', RUN);
+    expect(again).toMatchObject({ status: 'done', docno: 'BD1' });
+    expect(posts(world)).toHaveLength(1);
+  });
+
   it('refuses when the releases cannot be read, and sends nothing in read-only mode', async () => {
     const down = closedWorld();
     down.intercept = (method, path) =>

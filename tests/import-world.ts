@@ -47,6 +47,11 @@ export interface World {
   hang?: (method: string, path: string) => boolean;
   /** Return a Response to short-circuit a request (inject a failure). */
   intercept?: (method: string, path: string, body: Row | undefined) => Response | undefined;
+  /**
+   * Forms that answer every read with 200 and an empty list, filtered or not: the episode seen
+   * live on 2026-11-23, when a form's reads came back empty although its documents existed.
+   */
+  blind?: string[];
   writes: Write[];
   gets: string[];
 }
@@ -61,6 +66,12 @@ export const priorityError = (status: number, message: string) =>
 
 const quoted = (path: string, field: string): string[] =>
   [...path.matchAll(new RegExp(`${field} eq '([^']*)'`, 'g'))].map((m) => m[1]);
+/** An older, unrelated document: what an unfiltered read of a busy form always finds. */
+const BACKGROUND: Record<string, Row> = {
+  PINVOICES: { IVNUM: 'OLD1', DEBIT: 'D', IVTYPE: 'P' },
+  DOCUMENTS_P: { DOCNO: 'OLDGR', TYPE: 'P' },
+  DOCUMENTS_J: { DOCNO: 'OLDBD', TYPE: 'J' },
+};
 const keyPart = (segment: string, field: string): string | undefined =>
   segment.match(new RegExp(`${field}='([^']*)'`))?.[1] ??
   segment.match(new RegExp(`${field}=(\\d+)`))?.[1];
@@ -149,6 +160,8 @@ function handle(world: World, method: string, path: string, body: Row | undefine
 
   if (method === 'GET') {
     world.gets.push(path);
+    if (world.blind?.includes(form)) return json({ value: [] });
+    if (BACKGROUND[form] && !path.includes('$filter')) return json({ value: [BACKGROUND[form]] });
     if (form === 'IMPFILES') return json(world.file);
     if (form === 'COSTINGLOG') return json({ value: [] });
     if (form === 'COUNTRIES') {

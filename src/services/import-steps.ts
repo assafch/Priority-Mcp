@@ -78,7 +78,7 @@ export interface StepOutcome {
   step: PhaseBStep;
   impfnum: string;
   /** false until this tool passed a supervised run on a real file (see the runbook) */
-  piloted: false;
+  piloted: boolean;
   acknowledged: boolean;
   verified: boolean;
   verification: { reason: string };
@@ -122,8 +122,52 @@ const definitelyRejected = (err: unknown): boolean =>
   err.statusCode !== 408 &&
   err.statusCode !== 413;
 
+/**
+ * Which tools passed their supervised pilot on a real file (runbook, "Mark piloted"). Change a
+ * value only after a clean pilot plus clean read-back checks, together with the runbook table.
+ */
+export const PILOTED: Record<PhaseBStep, boolean> = {
+  declaration: true, // 2026-11-23, an open file at step 2
+  receipt: false,
+  fillDetail: false,
+  calc: false,
+  releaseDraft: false,
+  lineCosts: false,
+};
+
+/**
+ * True when an unfiltered read of the form finds at least one row. These forms are never empty
+ * in a working company, so an empty answer means the reads cannot be trusted: on 2026-11-23
+ * PINVOICES answered 200 with an empty list, unfiltered, for a while. A filtered read that comes
+ * back empty in such a moment looks like "no such document" — and a create on top of it makes a
+ * duplicate. Throws when the read itself fails.
+ */
+async function formAnswers(client: PriorityClient, form: string, key: string): Promise<boolean> {
+  const res = await client.list<Row>(form, new ODataBuilder().select(key).top(1).build(), {
+    cache: false,
+  });
+  return Array.isArray(res?.value) && res.value.length > 0;
+}
+
+/** The refusal reason when a form's reads come back empty, or null when it answers. */
+async function blindReason(
+  client: PriorityClient,
+  form: string,
+  key: string,
+): Promise<string | null> {
+  let answers: boolean;
+  try {
+    answers = await formAnswers(client, form, key);
+  } catch (err) {
+    return `לא ניתן היה לוודא שהקריאות מ-${form} עובדות (${describeError(err)}). לא נשלח דבר.`;
+  }
+  return answers
+    ? null
+    : `${form} החזיר רשימה ריקה גם בקריאה בלי סינון, ולכן אי אפשר לסמוך על קריאה ריקה ממנו עכשיו. לא נשלח דבר; מנסים שוב בעוד כמה דקות.`;
+}
+
 function outcomes(step: PhaseBStep, impfnum: string) {
-  const base = { step, impfnum, piloted: false as const };
+  const base = { step, impfnum, piloted: PILOTED[step] };
   return {
     refused: (reasons: string[], extra: Row = {}): StepOutcome => ({
       status: 'refused',
@@ -151,6 +195,15 @@ function outcomes(step: PhaseBStep, impfnum: string) {
       verified: false,
       verification: { reason: 'Server read-only policy blocks execution.' },
       error: 'Server is in read-only mode (PRIORITY_READ_ONLY=true). Nothing was sent.',
+    }),
+    /** Reads cannot be trusted right now (see blindReason): nothing was sent. */
+    blind: (reason: string): StepOutcome => ({
+      status: 'blocked',
+      ...base,
+      acknowledged: false,
+      verified: false,
+      verification: { reason: 'Reads came back empty even unfiltered; nothing was sent.' },
+      reasons: [reason],
     }),
     alreadyDone: (reason: string, extra: Row = {}, verified = true): StepOutcome => ({
       status: 'already-done',
@@ -265,6 +318,16 @@ async function readInvoice(client: PriorityClient, ivnum: string): Promise<Row |
   return res.value[0] ?? null;
 }
 
+/** "Not found" only when PINVOICES answers at all; otherwise the empty read is not believed. */
+async function invoiceMissing(
+  client: PriorityClient,
+  out: ReturnType<typeof outcomes>,
+  ivnum: string,
+): Promise<StepOutcome> {
+  const blind = await blindReason(client, 'PINVOICES', 'IVNUM');
+  return blind ? out.blind(blind) : out.refused([`החשבונית ${ivnum} לא נמצאה בחשבוניות הספק.`]);
+}
+
 // ------------------------------------------------------- import declaration (step 2)
 
 export interface DeclarationParams {
@@ -322,7 +385,7 @@ export async function setDeclaration(
   } catch (err) {
     return out.refused([`לא ניתן היה לקרוא את החשבונית ${p.invoiceNumber}: ${describeError(err)}`]);
   }
-  if (!invoice) return out.refused([`החשבונית ${p.invoiceNumber} לא נמצאה בחשבוניות הספק.`]);
+  if (!invoice) return invoiceMissing(client, out, p.invoiceNumber);
   const productLines = rows(invoice[INVOICE_LINES]).filter(isProductLine);
   if (productLines.length === 0) {
     return out.refused([`בחשבונית ${p.invoiceNumber} אין שורות מוצר.`]);
@@ -597,7 +660,7 @@ export async function createBondedReceipt(
       `לא ניתן היה לקרוא את החשבונית ${ivnum} או את הקבלות הקיימות שלה: ${describeError(err)}`,
     ]);
   }
-  if (!invoice) return out.refused([`החשבונית ${ivnum} לא נמצאה בחשבוניות הספק.`]);
+  if (!invoice) return invoiceMissing(client, out, ivnum);
 
   const live = existing.filter((r) => str(r.STATDES) !== CANCELLED_DOC_STATUS);
   if (live.length > 1) {
@@ -712,6 +775,17 @@ export async function createBondedReceipt(
           );
         }
         docno = String(appeared.DOCNO);
+      }
+    }
+    if (!docno) {
+      // An empty re-read is believed only when the form answers at all.
+      const blind = await blindReason(client, 'DOCUMENTS_P', 'DOCNO');
+      if (blind) {
+        return recordAfter(
+          ledgerPath,
+          { impfnum: p.impfnum, step, phase: 'failed' },
+          out.blind(blind),
+        );
       }
     }
     if (!docno) {
@@ -1672,6 +1746,17 @@ export async function createReleaseDraft(
           );
         }
         found = String(appearedDoc.DOCNO);
+      }
+    }
+    if (!found) {
+      // An empty re-read is believed only when the form answers at all.
+      const blind = await blindReason(client, 'DOCUMENTS_J', 'DOCNO');
+      if (blind) {
+        return recordAfter(
+          ledgerPath,
+          { impfnum: p.impfnum, step, phase: 'failed' },
+          out.blind(blind),
+        );
       }
     }
     if (!found) {
