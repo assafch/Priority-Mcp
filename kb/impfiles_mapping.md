@@ -236,9 +236,15 @@ Real broker invoice `GI25000026` on file `IM25000009` (forwarder שני שרות
 > `IMPFILE2` חישוב העמסה · `IMPFILE1` סגירת התיק · `OPENIMPFILE` ביטול סגירה של התיק ·
 > `FILL_IMPFILES` מילוי פירוט למחסן ערובה · `UPDPORDERITEMS` עדכון שורות הזמנות רכש. On
 > `DOCUMENTS_J` (קבלות סחורה ממחסן ערובה): `IMPORTCOSTPERLINE` רישום עלויות יבוא לשורה ·
-> `UNFINALDOC` פתיחת תעודה סופית לעריכה. None is run by this server. A field write of
+> `UNFINALDOC` פתיחת תעודה סופית לעריכה. Three are run by executing tools, once, through the Web
+> SDK: `FILL_IMPFILES` (`bonded_fill_detail`), `IMPFILE2` (`impfile_run_calc`), `IMPORTCOSTPERLINE`
+> (`bonded_line_costs`); the close, the reopen and `UNFINALDOC` are not run by this server.
+> Read live 23.11.2026: an SDK filter on `IMPFNUM` / `DOCNO` returns exactly one row; the IMPFILES
+> row carries `CLOSED` (`Y` when closed), the DOCUMENTS_J row `DOCNO`, `IMPFNUM`, `STATDES`;
+> `DOCUMENTS_P` has no `IMPFNUM` header field; `COUNTRIES` is not exposed to the API. A field write of
 > `IMPFILES.CLOSED` / `STATDES` and every write to `DOCUMENTS_J` are **blocked** in
-> `src/lib/import-stage-guard.ts`; the text below is the original Phase‑0 note.
+> `src/lib/import-stage-guard.ts`, except a draft header and line quantities sent by
+> `bonded_release_draft`; the text below is the original Phase‑0 note.
 
 **Not yet confirmed as OData actions.** `GetMetadataFor` doesn't enumerate bound actions, and full
 `$metadata` is too large to fetch reliably. Priority "programs/procedures" (חישוב העמסה, סגירת תיק,
@@ -287,7 +293,7 @@ Real broker invoice `GI25000026` on file `IM25000009` (forwarder שני שרות
 | 7 | `impfile_manual_alloc` | `POST …/MANIVDUTIES_SUBFORM` (cost) or `MANIVPARTS2_SUBFORM` (item) |
 | 8 | `po_match` | `GET PORDERS(key)?$expand=PORDERITEMS,PORDERTRANS,PORDERIV` + file invoices (§4) |
 | 9 | `po_close_lines` | `PATCH PORDERITEMS`/`PORDERS` close flags (procedure‑gated — verify §8) |
-| 10 | `impfile_run_calc` | procedure or UI‑guided + read‑back (§8) |
+| 10 | `impfile_run_calc` | direct activation `IMPFILE2` on the IMPFILES row through the Web SDK, then read‑back of the customs estimate (since 23.11.2026; first real run is a supervised pilot) |
 | 11 | `impfile_close` / `impfile_reopen` | read‑only stage check (since 23.11.2026); the close/reopen themselves are the screen procedures `IMPFILE1` / `OPENIMPFILE` |
 | 12 | `impfile_landed_cost` | read Priority result post‑calc; self‑compute fallback from §5/§6 logic |
 | 13 | `impfile_preflight` | 8 checks (§3.7); checks 1 (loading method) advisory — see §1 |

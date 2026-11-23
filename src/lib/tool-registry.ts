@@ -8,7 +8,12 @@ import { definitionFor } from './capability-definitions.js';
 import { outputSchemaFor } from './result-contracts.js';
 import { policyScopeFor } from './result-handles.js';
 import { rememberToolHelp } from './tool-help.js';
-import { effectiveTools, operationsDescription, workClassForTool } from './tool-profiles.js';
+import {
+  effectiveTools,
+  operationBudgetMsForTool,
+  operationsDescription,
+  workClassForTool,
+} from './tool-profiles.js';
 import { textResult } from './tool-result.js';
 
 type Callback = (...args: unknown[]) => Promise<CallToolResult> | CallToolResult;
@@ -70,6 +75,9 @@ export function toolRegistry(
                         Math.max(1000, (args[0] as { deadlineMs: number }).deadlineMs),
                       ),
                   }
+                : {}),
+              ...(operationBudgetMsForTool(name)
+                ? { deadlineAt: Date.now() + (operationBudgetMsForTool(name) as number) }
                 : {}),
               workClass: workClassForTool(name),
             });

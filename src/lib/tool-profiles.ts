@@ -96,6 +96,24 @@ const operationsSummaries: Record<string, string> = {
 export function operationsDescription(name: string, original: string): string {
   return `${operationsSummaries[name] ?? original.split('\n')[0]} Help: priority://tools/${name}; or capability detail by name.`;
 }
+/**
+ * The executing import steps do several reads, a write or a Priority program, and a re-read in one
+ * call. Under the interactive twenty seconds a program that ended cleanly would have its re-read
+ * cut off and be reported as unverified. They get three minutes.
+ */
+const STEP_TOOL_BUDGET_MS = 180_000;
+const STEP_TOOLS: ReadonlySet<string> = new Set([
+  'pinvoice_set_declaration',
+  'bonded_receipt',
+  'bonded_fill_detail',
+  'impfile_run_calc',
+  'bonded_release_draft',
+  'bonded_line_costs',
+]);
+export function operationBudgetMsForTool(name: string): number | undefined {
+  return STEP_TOOLS.has(name) ? STEP_TOOL_BUDGET_MS : undefined;
+}
+
 export function workClassForTool(name: string): import('../runtime/types.js').WorkClass {
   if (
     [

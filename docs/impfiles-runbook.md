@@ -21,10 +21,125 @@ goods line → 3. close the invoices (T→GI) → 4. receipt into `arov` → 5. 
 (draft) → 9. "רישום עלויות יבוא לשורה" (file closed, release still a draft) → 10. release final →
 11. "תמחיר לתאריך נוכחי" → 12. landed cost per product.
 
-`impfile_preflight` reports where a file stands on these twelve steps (`official`).
-`impfile_cost_report` gives step 12. `impfile_costing_readiness` is the company-wide check before
-step 11. Sections 2–3 below predate this and describe the tool calls; where they differ in order,
-this list wins.
+`impfile_preflight` reports where a file stands on these twelve steps (`official`); its
+`nextAction` names who does the step. `impfile_cost_report` gives step 12.
+`impfile_costing_readiness` is the company-wide check before step 11. Sections 2–3 below predate
+this and describe the tool calls; where they differ in order, this list wins.
+
+### Who does each step
+
+| Step | Done by | Leaves |
+|---|---|---|
+| 2 declaration on each goods line | `pinvoice_set_declaration` (invoice still a draft) | — |
+| 3 close the invoices | the owner (`priority_close_invoice`, approved per invoice) | — |
+| 4 receipt into `arov` | `bonded_receipt` | a DRAFT; the owner makes it final |
+| 5 fill detail | `bonded_fill_detail` (program `FILL_IMPFILES`) | pallet number is not written |
+| 6 loading calculation | `impfile_run_calc` (program `IMPFILE2`) | — |
+| 7 close the file | the owner, in the screen ("סגירת התיק") | — |
+| 8 release document | `bonded_release_draft` | a DRAFT |
+| 9 per-line import costs | `bonded_line_costs` (program `IMPORTCOSTPERLINE`) on the draft | — |
+| 10 release final | the owner, in the screen | — |
+| 11 costing | the owner ("תמחיר לתאריך נוכחי") | — |
+
+The five steps left to the owner cannot be undone over the API. The six tools never write a
+document status and never run the close or the costing.
+
+### Contract of the six executing tools
+
+- `dryRun` defaults to `true`: the plan, nothing sent. Nothing is sent when `PRIORITY_READ_ONLY=true`.
+- Order inside every tool: read → "already-done" from what Priority shows → gate → write → re-read.
+  A precondition that could not be read is a refusal.
+- `status`: `preview` · `refused` · `blocked` · `done` (confirmed by re-reading) · `already-done` ·
+  `incomplete` (a draft exists but is not complete; calling again continues it, never a second
+  document) · `unverified` (sent, result not visible: wait 180 s, re-read, do not resend) ·
+  `cancelled` (a program asked something unexpected and was cancelled unanswered) · `failed`.
+- Programs run once through the Web SDK as a direct activation of the row. An information message
+  is confirmed; a warning is answered only if its exact text is in `acceptPrompts`; an input dialog
+  cancels the run and is returned in `procedure.steps`.
+- Every write or program attempt is appended to `output/import-step-attempts.jsonl` before it is
+  sent and again with its result (refusals and previews are not recorded). Both files under
+  `output/` are git-ignored: they hold real document numbers.
+- One caller at a time per step and file: a claim file under `output/import-step-claims/` stops a
+  second process on the same machine. Servers on DIFFERENT machines (this Mac and the bot's host)
+  share neither the claim nor the ledger; between them the only protection is that a tool re-reads
+  what already exists in Priority right before it creates a document.
+- A draft that already carries quantities other than the requested ones is never overwritten; the
+  tool refuses and names the lines.
+- The six tools get a three-minute budget per call (other tools: twenty seconds), so a program
+  that ends cleanly is not cut off before its re-read.
+- `"piloted": false` on every result until the tool passed its pilot (below).
+
+### Pilot protocol
+
+The three programs were never run through the SDK on this tenant before, and "רישום עלויות יבוא
+לשורה" was never run on a DRAFT release here. The first REAL run of each tool is therefore a
+pilot: on a real file that is being processed anyway, with the owner watching the screen.
+
+For each tool, in this order:
+
+1. `dryRun: true` — read the plan (`wouldSend` / `wouldRun`) and any `warnings`.
+2. Programs only: `dryRun: true, probe: true` — the SDK logs in and finds the row; `probe.rowFound`
+   must be `true`, `probe.mismatch` `null`, and `probe.activation` must show `background: 0`.
+3. `dryRun: false`, once.
+4. Record the read-back checks below. Only a clean run plus clean checks counts as piloted.
+
+| Tool | Check after the real run (in the screen and by re-reading) |
+|---|---|
+| `pinvoice_set_declaration` | every product line of the draft invoice shows the declaration number and date; the `מע'מ` line is untouched |
+| `bonded_receipt` | one receipt, status טיוטא, warehouse `arov` / location `0`; every line quantity equals the invoice; total equals the invoice total |
+| `bonded_fill_detail` | "תכולה במחסני ערובה" lists every product of the goods invoice with the invoice quantity; the `מע'מ` line is 0 |
+| `impfile_run_calc` | "אומדן מכס" has a row per product, each with a country of origin; `impfile_close` shows `lastCalcViaTool` |
+| `bonded_release_draft` | one release, status טיוטא, declaration as given, quantities as requested; no second document |
+| `bonded_line_costs` | "עלויות יבוא לשורה" on every line; `lines[].totalILS` equals the screen; for a full release `reconciliation.status` is `ties` or `ties-within-rounding` |
+
+Observe and record during the pilots — Priority behaviour that could not be read in advance and
+that the tools' handling depends on:
+
+- `TQUANT` on freshly pulled receipt lines and release lines, before the tool writes them (0, or
+  already the full quantity?). It decides whether a tool's own half-made draft can be continued:
+  a line that carries another non-zero quantity is treated as entered by someone and not overwritten.
+- Whether `PQUANT` on a release line is the balance still in bond (the tool compares it with the
+  content balance; if it is the original quantity, a second partial release reports `incomplete`).
+- Whether a DRAFT release already lowers the content balance (`TBALANCE`). If it does, a second
+  `bonded_release_draft` call answers "no balance" instead of `already-done` — harmless, but note it.
+- Whether cost rows exist on a draft release before "רישום עלויות יבוא לשורה" runs (matters only
+  for a file with no cost invoice, where a cost of 0 counts as registered).
+- How long each program takes (the SDK waits 30 s per step; a longer program is reported
+  `unverified`), and the exact text of every message or prompt it shows.
+
+When a result is not `done`:
+
+- `cancelled` — a program asked something. Nothing is retried. Read `procedure.steps`: it holds the
+  exact text. Re-read the file to see whether anything changed. A warning may be accepted only
+  after the owner has seen its exact text and approved it; only then is that text passed in
+  `acceptPrompts` on the next run. The bot never adds a text to `acceptPrompts` by itself. An
+  error message or an input dialog means the step is done in the screen and the tool needs a
+  follow-up change.
+- `incomplete` — a draft exists (`docno`). Do not create another. Read `verification.reason`; fix
+  what it names in the screen, or call the same tool again to continue.
+- `unverified` — the write or the program was sent and the result is not visible, or cannot be
+  proven: a create that got no answer, a cancel Priority did not confirm, a program that ended
+  with a message, per-line costs that do not tie to the cost invoices, a rerun whose rows did not
+  change. Wait for the time in the refusal (180 s), re-read with `impfile_preflight`, and only
+  then decide.
+- `refused` — nothing was sent; `reasons` says what is missing.
+
+After a clean pilot, mark the tool as piloted here, with the date and the file:
+
+| Tool | Piloted on | File |
+|---|---|---|
+| `pinvoice_set_declaration` | — | — |
+| `bonded_receipt` | — | — |
+| `bonded_fill_detail` | — | — |
+| `impfile_run_calc` | — | — |
+| `bonded_release_draft` | — | — |
+| `bonded_line_costs` | — | — |
+
+Known limits: country of origin is written only where the countries table is exposed to the API (it
+is not on this tenant); a partial quantity for a part that sits on several release lines is set in
+the screen; the late-invoice path (reopen the release, "לבצע חישוב חוזר") is not covered; a file whose
+receipt was entered against purchase-order lines shows step 4 as unknown and continues in the
+screen.
 
 ## 0. Safety model — this build never wrote to Priority
 
@@ -93,8 +208,8 @@ credit note, then: Assaf reopens in the screen ("ביטול סגירה של הת
 ## 3. Bonded-warehouse flow (מחסן ערובה — `arov`)
 
 `arov` is a confirmed type-D bonded warehouse (holding location `0` excluded from inventory value;
-`arova` is the costed/released location). The bonded receive/release are **screen procedures**; the
-tools guide the sequence and verify state by read-back.
+`arova` is the costed/released location). Since 23.11.2026 each reversible step has an executing
+tool (see "Who does each step" above); the `*_guide` tools below only explain and read back.
 
 1. `bonded_status { warehouse: "arov" }` — confirm the bonded config.
 2. Open file + link invoices (§2 steps 1–4).
