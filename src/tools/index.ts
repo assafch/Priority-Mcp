@@ -13,6 +13,7 @@ import { registerEntityResolutionTools } from './entity-resolution.js';
 import { registerFinanceTools } from './finance.js';
 import { registerGenericTools } from './generic.js';
 import { registerImpfileCostingTools } from './impfile-costing.js';
+import { registerImpfileStepTools } from './impfile-steps.js';
 import { registerBondedTools } from './impfiles-bonded.js';
 import { registerImpfileTools } from './impfiles.js';
 import { registerInvoiceTools } from './invoices.js';
@@ -64,4 +65,6 @@ export function registerAllTools(server: McpServer, client: PriorityClient, conf
   registerBondedTools(gated, client, config);
   // The end of the official process: landed cost per product and costing readiness (read-only).
   registerImpfileCostingTools(gated, client, config);
+  // The reversible steps of the official process, one executing tool per step (drafts only).
+  registerImpfileStepTools(gated, client, config);
 }

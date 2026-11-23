@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { PriorityError } from '../client/errors.js';
 import { canonicalFieldName, wireBody } from './procedure-only-fields.js';
 
@@ -18,6 +19,10 @@ import { canonicalFieldName, wireBody } from './procedure-only-fields.js';
  *
  * The check sits in PriorityClient.send, next to the FINAL guard, so every write path is covered:
  * curated tools, generic tools and scripts that import the client.
+ *
+ * One narrow opening exists: inside runWithReleaseDraftScope the release-draft tool may create a
+ * DRAFT release header and set line quantities — nothing else. Status, flags, cost rows, new
+ * lines and deletes stay blocked there too.
  */
 export const IMPORT_STAGE_GUARD_CODE = 'IMPORT_STAGE_GUARD';
 
@@ -37,7 +42,7 @@ function statusMessage(method: string, target: string): string {
 }
 
 function releaseMessage(method: string, target: string): string {
-  return `Blocked: ${method} ${target} writes a bonded release (קבלות סחורה ממחסן ערובה). Priority's procedure (SOP LBI2400656, step ד׳ 13–15) is: fill the release, run "רישום עלויות יבוא לשורה" while the file is closed and the release is still a draft, check the costs, and only then set it final. Some early releases were made final without that step and got their costs only later. Releases are done in the screen until a dedicated tool does all of it. Nothing was sent.`;
+  return `Blocked: ${method} ${target} writes a bonded release (קבלות סחורה ממחסן ערובה). Priority's procedure (SOP LBI2400656, step ד׳ 13–15) is: fill the release, run "רישום עלויות יבוא לשורה" while the file is closed and the release is still a draft, check the costs, and only then set it final. Some early releases were made final without that step and got their costs only later. A draft release is created only by bonded_release_draft (header and quantities, no status); the costs by bonded_line_costs; making it final is done in the screen. Nothing was sent.`;
 }
 
 /** Path segments of a request URL or relative OData path, decoded, without query or fragment. */
@@ -56,6 +61,62 @@ function segmentName(segment: string): string {
   return segment.replace(/\(.*$/s, '').trim();
 }
 
+const releaseDraftScope = new AsyncLocalStorage<true>();
+
+/**
+ * Run `fn` with the one opening in the release lock: a draft header POST and line-quantity
+ * PATCHes. Wrap a single write, not a whole tool. The scope follows the async call chain of `fn`
+ * only; a concurrent caller outside it stays blocked.
+ */
+export function runWithReleaseDraftScope<T>(fn: () => Promise<T>): Promise<T> {
+  return releaseDraftScope.run(true, fn);
+}
+
+/** The only fields a draft release header may be created with. No status, no lines. */
+const RELEASE_HEADER_FIELDS: ReadonlySet<string> = new Set([
+  'CURDATE',
+  'IMPFNUM',
+  'WARHSNAME',
+  'LOCNAME',
+  'TOWARHSNAME',
+  'TOLOCNAME',
+  'DOCREF',
+]);
+const RELEASE_LINES = 'TRANSORDER_J_SUBFORM';
+
+const isScalar = (value: unknown): boolean =>
+  typeof value === 'string' || (typeof value === 'number' && Number.isFinite(value));
+
+/**
+ * True for exactly two request shapes:
+ *   POST  …/DOCUMENTS_J                                   body ⊆ the seven header fields, scalars
+ *   PATCH …/DOCUMENTS_J(<key>)/TRANSORDER_J_SUBFORM(<key>)  body = { TQUANT: number }
+ */
+function isDraftReleaseWrite(
+  verb: string,
+  segments: string[],
+  names: string[],
+  body: unknown,
+): boolean {
+  const at = names.indexOf('DOCUMENTS_J');
+  if (at !== names.lastIndexOf('DOCUMENTS_J')) return false;
+  const wire = wireBody(body);
+  if (!wire || typeof wire !== 'object' || Array.isArray(wire)) return false;
+  const entries = Object.entries(wire as Record<string, unknown>);
+  if (entries.length === 0) return false;
+
+  if (verb === 'POST') {
+    if (at !== names.length - 1 || segments[at].includes('(')) return false;
+    return entries.every(([key, value]) => RELEASE_HEADER_FIELDS.has(key) && isScalar(value));
+  }
+  if (verb === 'PATCH') {
+    if (at !== names.length - 2 || !segments[at].includes('(')) return false;
+    if (names[at + 1] !== RELEASE_LINES || !segments[at + 1].includes('(')) return false;
+    return entries.length === 1 && entries[0][0] === 'TQUANT' && typeof entries[0][1] === 'number';
+  }
+  return false;
+}
+
 /** The violation a mutating request commits, or null. Reads never match. */
 export function findStageViolation(
   method: string,
@@ -68,6 +129,9 @@ export function findStageViolation(
   const names = segments.map(segmentName);
 
   if (names.includes('DOCUMENTS_J')) {
+    if (releaseDraftScope.getStore() && isDraftReleaseWrite(verb, segments, names, body)) {
+      return null;
+    }
     return { rule: 'bonded-release', message: releaseMessage(verb, target) };
   }
 
@@ -116,7 +180,7 @@ export function assertNoStageViolation(method: string, body: unknown, target?: s
     IMPORT_STAGE_GUARD_CODE,
     found.rule === 'impfile-status'
       ? 'Use impfile_close / impfile_reopen to see what is missing; the close itself is done in the Priority screen.'
-      : 'Use bonded_release_guide for the screen steps and bonded_line_costs_guide to verify the costs.',
+      : 'Use bonded_release_draft to create the draft, bonded_line_costs for the per-line costs and bonded_line_costs_guide to verify them; the status change to final is done in the Priority screen.',
   );
 }
 

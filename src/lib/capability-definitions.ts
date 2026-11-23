@@ -89,11 +89,14 @@ const rows: Array<
   ['impfile_search', 'impfiles', 'read', 'implemented', ['IMPFILES']],
   ['impfile_update', 'impfiles', 'write', 'implemented', ['IMPFILES']],
   ['pinvoice_create', 'impfiles', 'write', 'implemented', ['PINVOICES', 'IMPFILES']],
+  ['pinvoice_set_declaration', 'impfiles', 'write', 'implemented', ['IMPFILES', 'PINVOICES']],
   ['po_close_lines', 'impfiles', 'write', 'implemented', ['PORDERS', 'IMPFILES']],
   ['po_match', 'impfiles', 'read', 'implemented', ['PORDERS']],
   ['bonded_fill_detail_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
   ['bonded_line_costs_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
+  ['bonded_receipt', 'impfiles', 'write', 'implemented', ['IMPFILES', 'PINVOICES', 'DOCUMENTS_P']],
   ['bonded_receipt_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
+  ['bonded_release_draft', 'impfiles', 'write', 'implemented', ['IMPFILES', 'DOCUMENTS_J']],
   ['bonded_release_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
   ['bonded_status', 'impfiles-bonded', 'read', 'implemented', ['WAREHOUSES']],
   ['priority_create_credit_memo', 'invoices', 'write', 'implemented', ['AINVOICES']],
@@ -105,6 +108,10 @@ const rows: Array<
     'implemented',
     ['EINVOICES', 'AINVOICES', 'PINVOICES'],
   ],
+  // Import-file programs run the same way (direct activation through the Web SDK).
+  ['bonded_fill_detail', 'procedures', 'write', 'implemented', ['IMPFILES']],
+  ['bonded_line_costs', 'procedures', 'write', 'implemented', ['IMPFILES', 'DOCUMENTS_J']],
+  ['impfile_run_calc', 'procedures', 'write', 'implemented', ['IMPFILES']],
   // Same Web SDK as close, but display-mode only. ORDERS and AINVOICES are the probed forms;
   // EINVOICES and the other print forms are accepted without making the tool look unavailable
   // when one of them is not exposed.

@@ -116,8 +116,10 @@ warehouse can be TYPE='D' without being bonded (e.g. the main warehouse) — BON
     'bonded_receipt_guide',
     `קבלת סחורה למחסן ערובה (spec §Phase 5). READ-ONLY GUIDE — does NOT receive anything.
 
-⚠️ Done by the owner in the screen "קבלות סחורה מספק" (warehouse BONDED, location 0); this tool only explains
-the step and reads back the file; results carry "mutates": false. Receiving into the bonded holding
+The step itself is done by bonded_receipt, which creates the receipt as a DRAFT (warehouse BONDED,
+location 0, invoice quantities); making the receipt final stays with the owner, in the screen "קבלות
+סחורה מספק". This guide only explains the step and reads back the file; results carry "mutates":
+false. Receiving into the bonded holding
 location keeps the goods OUT of inventory value until release (LBI2400656), and CLOSES the PO balance
 even before release. Returns the step guidance + a read-back of the file's goods content.`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },
@@ -128,13 +130,15 @@ even before release. Returns the step guidance + a read-back of the file's goods
           mutates: false,
           impfnum: p.impfnum,
           step: 'bonded receipt (קבלת סחורה למחסן ערובה)',
-          doneBy: 'the owner, in the screen',
+          tool: 'bonded_receipt',
+          doneBy: 'bonded_receipt (creates the draft receipt); the owner makes it final',
+          stillManual: 'הבעלים: שינוי סטטוס הקבלה לסופית במסך "קבלות סחורה מספק".',
           screenAction: 'קבלות סחורה מספק (מחסן BONDED, איתור 0)',
           warehouse: file.WARHSNAME ?? null,
           instructions: [
-            'Receive the supplier goods into the bonded warehouse (BONDED, bonded holding location).',
+            'bonded_receipt receives the goods invoice into the bonded warehouse (BONDED, bonded holding location) as a draft; the owner then sets the receipt to final.',
             'The receipt keeps the goods out of inventory value until release, and closes the PO balance (reflected by po_match).',
-            'Next: bonded_fill_detail to record the pallet contents.',
+            'Next, once the receipt is final: bonded_fill_detail.',
           ],
           readback: goodsReadback(file.IMPFILEITEMS_SUBFORM),
         });
@@ -148,8 +152,10 @@ even before release. Returns the step guidance + a read-back of the file's goods
     'bonded_fill_detail_guide',
     `מילוי פירוט למחסן ערובה / תכולה במחסני ערובה (spec §Phase 5). READ-ONLY GUIDE — fills in nothing.
 
-⚠️ Done by the owner in the import-file screen; results carry "mutates": false. After the bonded receipt, run "מילוי פירוט למחסן ערובה" and record the pallet
-number in "תכולה במחסני ערובה". Returns the step guidance + a read-back of the file's goods content.`,
+The step itself is done by bonded_fill_detail, which runs Priority's program "מילוי פירוט למחסן
+ערובה" after the receipt is final and zeroes the VAT line the program copies. The pallet number in
+"תכולה במחסני ערובה" is not written by any tool. This guide only explains the step and reads back
+the file's goods content; results carry "mutates": false.`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },
     async (p) => {
       try {
@@ -158,11 +164,14 @@ number in "תכולה במחסני ערובה". Returns the step guidance + a re
           mutates: false,
           impfnum: p.impfnum,
           step: 'fill bonded detail (מילוי פירוט למחסן ערובה)',
-          doneBy: 'the owner, in the screen',
+          tool: 'bonded_fill_detail',
+          doneBy: 'bonded_fill_detail (runs the program FILL_IMPFILES)',
+          stillManual:
+            'מספר משטח ב"תכולה במחסני ערובה" אינו נכתב על ידי הכלי; אם רוצים אותו, הבעלים ממלא במסך.',
           screenAction: 'מילוי פירוט למחסן ערובה',
           instructions: [
-            'Fill "מילוי פירוט למחסן ערובה" and record the pallet number in "תכולה במחסני ערובה".',
-            'Next: run "חישוב העמסה", check readiness with impfile_close, close the file in the screen ("סגירת התיק"), then bonded_release_guide.',
+            'bonded_fill_detail runs "מילוי פירוט למחסן ערובה" and verifies the content against the goods invoice.',
+            'Next: impfile_run_calc ("חישוב העמסה"), check readiness with impfile_close, then the owner closes the file in the screen ("סגירת התיק"), then bonded_release_draft.',
           ],
           readback: goodsReadback(file.IMPFILEITEMS_SUBFORM),
         });
@@ -176,8 +185,10 @@ number in "תכולה במחסני ערובה". Returns the step guidance + a re
     'bonded_release_guide',
     `שחרור מהמחסן ערובה (קבלות סחורה ממחסן ערובה, spec §Phase 5). READ-ONLY GUIDE — releases nothing.
 
-⚠️ Done by the owner in the screen "קבלות סחורה ממחסן ערובה" (the server blocks writing a release over the
-API); results carry "mutates": false. Release is done on the customs (מכס) part only, against a rishumon (declaration),
+The draft release is created by bonded_release_draft (header + quantities, no status) and its
+per-line costs by bonded_line_costs; making the release final stays with the owner, in the screen
+"קבלות סחורה ממחסן ערובה" (the server blocks every other write to a release). This guide only
+explains and reads back; results carry "mutates": false. Release is done on the customs (מכס) part only, against a rishumon (declaration),
 with released quantities (partial supported), the customs-broker invoice, the per-line import costs,
 and the additional-costs %. The FILE MUST BE CLOSED before release. Per the SOP (LBI2400656 ד׳
 13–15) "רישום עלויות יבוא לשורה" is run on the release BEFORE it is made final. Returns guidance +
@@ -198,17 +209,20 @@ mandatory order are proven).`,
           mutates: false,
           impfnum: p.impfnum,
           step: 'bonded release (קבלות סחורה ממחסן ערובה)',
-          doneBy: 'the owner, in the screen',
+          tool: 'bonded_release_draft',
+          doneBy:
+            'bonded_release_draft (draft + quantities), then bonded_line_costs; the owner makes it final',
+          stillManual:
+            'הבעלים: שינוי סטטוס תעודת השחרור לסופית במסך "קבלות סחורה ממחסן ערובה", אחרי בדיקת העלויות לשורה. מספר משטח ואחוז עלויות נוספות אינם נכתבים על ידי הכלים.',
           screenAction: 'קבלות סחורה ממחסן ערובה',
           fileClosed: closedGate.fileClosed,
           // An open file lists what is still missing before the close; a closed one only the gate.
           warnings: [...closedGate.warnings, ...(stage.closed ? [] : stage.closeBlocking)],
           stage,
           instructions: [
-            'In "קבלות סחורה ממחסן ערובה": select the file + rishumon (declaration) number + the customs-broker invoice (on the מכס part ONLY).',
-            'Enter the released quantities (partial allowed), the per-line import costs, and the additional-costs %.',
-            'לפי ה-SOP (LBI2400656, שלב ד׳ 13–15): להריץ "רישום עלויות יבוא לשורה" כשהתיק סגור והתעודה עדיין טיוטה, לבדוק את העלויות במסך "עלויות יבוא לשורה", ורק אז לשנות את הסטטוס לסופית. אחר כך תמחיר.',
-            'לידיעה: עד 23.11.2026 כל ההרצות של "רישום עלויות יבוא לשורה" בחברה היו על תעודה סופית; הסדר הרשמי (על טיוטה) טרם נוסה כאן.',
+            'bonded_release_draft: the file + rishumon (declaration) number + released quantities (whole balance, or a partial list). It leaves the release a draft.',
+            'לפי ה-SOP (LBI2400656, שלב ד׳ 13–15): bonded_line_costs מריץ "רישום עלויות יבוא לשורה" כשהתיק סגור והתעודה עדיין טיוטה; בודקים את העלויות לשורה, ורק אז הבעלים משנה את הסטטוס לסופית. אחר כך תמחיר.',
+            'לידיעה: עד 23.11.2026 כל ההרצות של "רישום עלויות יבוא לשורה" בחברה היו על תעודה סופית; הסדר הרשמי (על טיוטה) טרם נוסה כאן, ולכן ההרצה הראשונה של כל כלי היא פיילוט בנוכחות הבעלים.',
             'Editing after a partial release: the owner reopens the file in the screen ("ביטול סגירה של התיק") → add → close again.',
           ],
           readback: goodsReadback(file.IMPFILEITEMS_SUBFORM),
@@ -224,7 +238,8 @@ mandatory order are proven).`,
     `רישום עלויות ייבוא לשורה (spec §Phase 5). READ-ONLY GUIDE — registers no costs. The FILE MUST BE
 CLOSED for the real (screen) operation.
 
-⚠️ Done by the owner in the release screen ("רישום עלויות יבוא לשורה"); results carry "mutates": false.
+The step itself is done by bonded_line_costs, which runs Priority's program "רישום עלויות יבוא
+לשורה" on one release. This guide only reads; results carry "mutates": false.
 Checks the file is closed, returns the step guidance, and READS BACK every release of the file:
 how many released lines carry an import cost and how many do not. Per-line import costs are
 registered only on a CLOSED file, and per the SOP (LBI2400656 ד׳ 13–15) before the release is made
@@ -251,13 +266,15 @@ final. For the cost of each product see impfile_cost_report.`,
           mutates: false,
           impfnum: p.impfnum,
           step: 'register import costs to line (רישום עלויות ייבוא לשורה)',
-          doneBy: 'the owner, in the screen',
+          tool: 'bonded_line_costs',
+          doneBy: 'bonded_line_costs (runs the program IMPORTCOSTPERLINE on one release)',
+          stillManual: 'הבעלים: בדיקת העלויות, שינוי סטטוס תעודת השחרור לסופית, ותמחיר לתאריך נוכחי.',
           screenAction: 'רישום עלויות יבוא לשורה',
           fileClosed: closedGate.fileClosed,
           warnings: [...closedGate.warnings, ...costWarnings],
           lineCosts,
           instructions: [
-            'On the closed file, register the per-line import costs in "רישום עלויות ייבוא לשורה".',
+            'On the closed file, bonded_line_costs registers the per-line import costs on the release while it is still a draft.',
             'To add costs after a partial release: the owner reopens the file in the screen → add → close again.',
           ],
         });

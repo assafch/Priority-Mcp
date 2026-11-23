@@ -2,7 +2,7 @@
 
 This catalog describes code, not current tenant permissions. Use `priority_get_capabilities` for policy and dated form-readability evidence; follow `nextSkip`. A successful form probe does not enable an unavailable handler or prove a write.
 
-116 registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
+122 registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
 
 | Tool | Domain | Mode | Implementation |
 | --- | --- | --- | --- |
@@ -51,6 +51,8 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `priority_resolve_entity` | generic | read | implemented |
 | `priority_update_line` | generic | write | implemented |
 | `priority_update_record` | generic | write | implemented |
+| `bonded_receipt` | impfiles | write | implemented |
+| `bonded_release_draft` | impfiles | write | implemented |
 | `impfile_close` | impfiles | guide | implemented |
 | `impfile_cost_report` | impfiles | read | implemented |
 | `impfile_costing_readiness` | impfiles | read | implemented |
@@ -66,6 +68,7 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `impfile_search` | impfiles | read | implemented |
 | `impfile_update` | impfiles | write | implemented |
 | `pinvoice_create` | impfiles | write | implemented |
+| `pinvoice_set_declaration` | impfiles | write | implemented |
 | `po_close_lines` | impfiles | write | implemented |
 | `po_match` | impfiles | read | implemented |
 | `bonded_fill_detail_guide` | impfiles-bonded | guide | implemented |
@@ -95,6 +98,9 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `priority_get_pending_orders` | orders | read | implemented |
 | `priority_list_orders` | orders | read | implemented |
 | `priority_update_order` | orders | write | implemented |
+| `bonded_fill_detail` | procedures | write | implemented |
+| `bonded_line_costs` | procedures | write | implemented |
+| `impfile_run_calc` | procedures | write | implemented |
 | `priority_close_invoice` | procedures | write | implemented |
 | `priority_customer_ledger` | procedures | read | implemented |
 | `priority_print_document` | procedures | read | implemented |

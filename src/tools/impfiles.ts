@@ -25,6 +25,7 @@ import { DRAFT_FILE_STATUS } from '../lib/import-stage-guard.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
+import { DEFAULT_STEP_LEDGER_PATH, lastDoneAt } from '../lib/step-ledger.js';
 import { deleteRowVerified } from '../lib/subform-rows.js';
 import {
   checkWriteAllowed,
@@ -507,7 +508,15 @@ async function createGoodsInvoiceFromPo(client: PriorityClient, config: Config, 
   }
 }
 
-export function registerImpfileTools(server: McpServer, client: PriorityClient, config: Config) {
+export function registerImpfileTools(
+  server: McpServer,
+  client: PriorityClient,
+  config: Config,
+  deps: { stepLedgerPath?: string } = {},
+) {
+  /** Last confirmed run of "חישוב העמסה" through impfile_run_calc (information only). */
+  const lastCalcViaTool = (impfnum: string) =>
+    lastDoneAt(deps.stepLedgerPath ?? DEFAULT_STEP_LEDGER_PATH, impfnum, 'calc');
   // --------------------------------------------------------------------- Read
 
   server.tool(
@@ -1123,6 +1132,7 @@ API-readable here (loading method per cost part; last-calc timestamp).`,
           blocking: [...pf.blocking, ...stage.closeBlocking],
           advisory: [...pf.advisory, ...stage.advisory],
           info: pf.info,
+          lastCalcViaTool: lastCalcViaTool(p.impfnum),
           stage,
           official: computeOfficialSteps(facts),
         });
@@ -1189,9 +1199,9 @@ line key and is best done in the screen.
     'impfile_run_calc_guide',
     `הרצת חישוב העמסה (spec §0/§3.7). READ-ONLY GUIDE — does NOT run the loading calculation.
 
-⚠️ The calc ("חישוב העמסה") is a Priority SCREEN PROCEDURE, not an OData action on this install, so
-no tool here can trigger it. This one reports the file's current customs-estimate state and the exact
-step to run in the screen; afterwards re-call impfile_landed_cost / impfile_preflight to verify.
+The calc ("חישוב העמסה") is Priority's program IMPFILE2; it is run by impfile_run_calc (a direct
+activation through the Web SDK), not by an OData write. This guide reports the file's current
+customs-estimate state; after a run, re-check with impfile_preflight / impfile_close.
 Results carry "mutates": false.`,
     {
       impfnum: z.string().min(1).describe('IMPFNUM'),
@@ -1206,9 +1216,10 @@ Results carry "mutates": false.`,
           mutates: false,
           impfnum: p.impfnum,
           action: 'RUN LOADING CALC (חישוב העמסה)',
-          exposedAsApi: false,
+          tool: 'impfile_run_calc',
           instruction:
-            'Run "חישוב העמסה" in the import-file screen, then re-check impfile_landed_cost / impfile_preflight.',
+            'Run impfile_run_calc ("חישוב העמסה", program IMPFILE2), then re-check impfile_preflight / impfile_close.',
+          lastCalcViaTool: lastCalcViaTool(p.impfnum),
           currentCustomsEstimateLines: customs.length,
         });
       } catch (err) {
@@ -1239,7 +1250,7 @@ Results carry "mutates": false.`,
         const nextStep = stage.closed
           ? 'התיק כבר סגור.'
           : readyToClose
-            ? 'הבעלים: להריץ "חישוב העמסה" ואז "סגירת התיק" במסך תיקי יבוא.'
+            ? 'impfile_run_calc (חישוב העמסה), ואז הבעלים: "סגירת התיק" במסך תיקי יבוא.'
             : blocking[0];
         return textResult({
           mutates: false,
@@ -1247,6 +1258,7 @@ Results carry "mutates": false.`,
           closed: stage.closed,
           readyToClose,
           nextStep,
+          lastCalcViaTool: lastCalcViaTool(p.impfnum),
           blocking,
           stage,
           preflight: pf,

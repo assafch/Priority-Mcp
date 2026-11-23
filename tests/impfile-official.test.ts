@@ -306,6 +306,74 @@ describe('computeOfficialSteps', () => {
   });
 });
 
+describe('nextAction', () => {
+  const draftLine = (part: string, qty: number) => line(part, qty, 0, 0, null);
+  const inBond = complete.content.map((c) => ({ ...c, balance: c.qty }));
+  /** The same file before anything was received. */
+  const opened: FileFacts = {
+    ...complete,
+    closed: false,
+    receipts: [],
+    content: [],
+    customsEstimateParts: [],
+    releases: [],
+  };
+  const received: FileFacts = { ...opened, receipts: complete.receipts };
+  const filled: FileFacts = { ...received, content: inBond };
+  const closed: FileFacts = { ...filled, customsEstimateParts: ['P1', 'P2'], closed: true };
+  const draft = release({
+    status: 'טיוטא',
+    lines: [draftLine('P1', 100), draftLine('P2', 50)],
+  });
+
+  it.each([
+    [
+      2,
+      'pinvoice_set_declaration',
+      {
+        ...opened,
+        invoices: [{ ...complete.invoices[0], linesWithoutDeclaration: 2 }, complete.invoices[1]],
+      },
+    ],
+    [4, 'bonded_receipt', opened],
+    [5, 'bonded_fill_detail', received],
+    [6, 'impfile_run_calc', filled],
+    [8, 'bonded_release_draft', closed],
+    [9, 'bonded_line_costs', { ...closed, releases: [draft] }],
+  ] as Array<[number, string, FileFacts]>)(
+    'step %i names the tool that does it: %s',
+    (n, tool, facts) => {
+      const stage = computeOfficialSteps(facts);
+      expect(stage.currentStep).toBe(n);
+      expect(stage.nextAction).toContain(tool);
+    },
+  );
+
+  it('step 4 also says that making the receipt final is the owner’s', () => {
+    expect(computeOfficialSteps(opened).nextAction).toMatch(/bonded_receipt.*הבעלים.*סופית/);
+  });
+
+  it.each([
+    [
+      3,
+      {
+        ...opened,
+        invoices: [{ ...complete.invoices[0], ivnum: 'T1', isFinal: false }, complete.invoices[1]],
+      },
+    ],
+    [7, { ...filled, customsEstimateParts: ['P1', 'P2'] }],
+    [10, { ...closed, releases: [release({ status: 'טיוטא' })] }],
+    [11, { ...complete, lastCostingAt: '2026-02-01T00:00:00Z' }],
+  ] as Array<[number, FileFacts]>)('step %i stays with the owner', (n, facts) => {
+    const stage = computeOfficialSteps(facts);
+    expect(stage.currentStep).toBe(n);
+    expect(stage.nextAction).toContain('הבעלים');
+    expect(stage.nextAction).not.toMatch(
+      /pinvoice_set_declaration|bonded_receipt|bonded_fill_detail|impfile_run_calc|bonded_release_draft|bonded_line_costs/,
+    );
+  });
+});
+
 describe('reconcileImportCosts', () => {
   it('ties when the costs on the releases equal the cost invoices without the VAT line', () => {
     const rec = reconcileImportCosts(complete);

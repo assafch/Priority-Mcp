@@ -445,15 +445,32 @@ against purchase orders, run pre-close diagnostics, and estimate landed cost. Se
 | `impfile_expected_costs` | Write | Record expected costs (feeds the expected/actual report) |
 | `po_match` | Read | Three-way match: ordered ↔ received ↔ invoiced, with per-line verdicts |
 | `po_close_lines` | Write | Close a purchase order / force-close the remaining balance (procedure-gated) |
-| `impfile_run_calc_guide` | Read | Guidance + state for the loading calc (חישוב העמסה — a screen procedure); `mutates: false` |
+| `impfile_run_calc_guide` | Read | State of the customs estimate before/after the loading calc; the calc itself is run by `impfile_run_calc`; `mutates: false` |
 | `impfile_preflight` | Read | 8 pre-close checks → `{ ok, blocking, advisory, info }` |
 | `impfile_close` / `impfile_reopen` | Check | **Never write.** Report which steps of the mandatory order are proven and what is missing; closing and reopening are done in the Priority screen |
 | `impfile_landed_cost` | Read | Value-weighted landed-cost estimate per SKU |
 
+### Import steps — executing tools (6)
+
+One tool per reversible step of Priority's official import-file procedure (SOP LBI2400273 and
+LBI2400656). Each previews by default (`dryRun: true`), refuses unless the earlier steps are proven,
+changes nothing on a repeat, and reports `done` only from a re-read. None writes a document status:
+making the receipt and the release final, closing invoices and the file, and the costing stay with
+the owner. See the pilot protocol in [`docs/impfiles-runbook.md`](docs/impfiles-runbook.md).
+
+| Tool | Step | Description |
+|:-----|:----:|:------------|
+| `pinvoice_set_declaration` | 2 | Import declaration number + date on every product line of a DRAFT goods invoice |
+| `bonded_receipt` | 4 | Create or continue a DRAFT receipt of the goods invoice into `BONDED`, with the invoice quantities |
+| `bonded_fill_detail` | 5 | Run "מילוי פירוט למחסן ערובה" (FILL_IMPFILES), zero the VAT line it copies, verify the content |
+| `impfile_run_calc` | 6 | Run "חישוב העמסה" (IMPFILE2) and verify the customs estimate covers the content |
+| `bonded_release_draft` | 8 | Create or continue a DRAFT release of a closed file: whole balance, or listed parts |
+| `bonded_line_costs` | 9 | Run "רישום עלויות יבוא לשורה" (IMPORTCOSTPERLINE) on the release and return the cost of every line |
+
 ### Bonded Warehouse — מחסן ערובה (5)
 
-Read + UI-guided + read-back verification for the two-step bonded receive→release flow (the bonded
-procedures are Priority screen operations, not OData-writable).
+Read-only guides and read-back for the bonded receive→release flow. The steps themselves are done by
+the executing tools above; each guide names its tool and what stays with the owner.
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|

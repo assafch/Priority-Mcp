@@ -63,6 +63,8 @@ export interface ReceiptFact {
 }
 
 export interface ReleaseLineFact {
+  /** line number within the release (KLINE); absent in hand-built facts */
+  kline?: number | null;
   part: string;
   /** product description as printed on the release line */
   description?: string | null;
@@ -105,7 +107,8 @@ export interface FileFacts {
   content: Array<{ part: string; qty: number; balance: number }>;
   /**
    * "מילוי פירוט למחסן ערובה" also copies the VAT-from-declaration line of the broker invoice into
-   * the content. It is not a product and has to be zeroed; this is its quantity when present.
+   * the content. It is not a product and has to be zeroed. This is the summed absolute quantity
+   * of ALL such lines (0 only when every one is zero); null when the content has none.
    */
   contentVatLineQty?: number | null;
   /** distinct parts that have a customs-estimate row */
@@ -686,10 +689,32 @@ export function computeOfficialSteps(facts: FileFacts): OfficialStage {
   };
 }
 
+/**
+ * Who performs each step. The reversible steps have an executing tool; the steps that cannot be
+ * undone over the API (invoice close, receipt final, file close, release final, costing) stay
+ * with the owner.
+ */
+const STEP_ACTOR: Record<number, string> = {
+  2: 'מבצע: pinvoice_create / impfile_link_invoice לקישור חשבונית; pinvoice_set_declaration להצהרת היבוא בשורות, כשהחשבונית עוד טיוטה.',
+  3: 'מבצע: הבעלים — סגירת החשבוניות (priority_close_invoice, באישורו לכל חשבונית).',
+  4: 'מבצע: bonded_receipt (קבלה בטיוטה), ואחריו הבעלים משנה את סטטוס הקבלה לסופית.',
+  5: 'מבצע: bonded_fill_detail.',
+  6: 'מבצע: impfile_run_calc.',
+  7: 'מבצע: הבעלים — "סגירת התיק" במסך תיקי יבוא (בדיקת מוכנות: impfile_close).',
+  8: 'מבצע: bonded_release_draft (תעודת שחרור בטיוטה).',
+  9: 'מבצע: bonded_line_costs (על התעודה, כשהיא עוד טיוטה).',
+  10: 'מבצע: הבעלים — שינוי סטטוס תעודת השחרור לסופית, אחרי בדיקת העלויות לשורה.',
+  11: 'מבצע: הבעלים — "תמחיר לתאריך נוכחי" (בדיקת מוכנות: impfile_costing_readiness).',
+  12: 'דוח: impfile_cost_report.',
+};
+
 function nextActionFor(step: OfficialStep): string {
   const head = `שלב ${step.n} — ${step.title}: ${step.program}.`;
-  if (step.state === 'unknown') return `${head} לא ניתן לאמת כרגע: ${step.detail.join(' ')}`;
-  return step.detail.length ? `${head} ${step.detail.join(' ')}` : head;
+  const actor = STEP_ACTOR[step.n] ? ` ${STEP_ACTOR[step.n]}` : '';
+  if (step.state === 'unknown') {
+    return `${head} לא ניתן לאמת כרגע: ${step.detail.join(' ')}${actor}`;
+  }
+  return `${step.detail.length ? `${head} ${step.detail.join(' ')}` : head}${actor}`;
 }
 
 // -------------------------------------------------------------- cost report

@@ -128,6 +128,41 @@ describe('bonded_release_guide', () => {
   });
 });
 
+describe('guides point to the executing tools', () => {
+  const file = { IMPFNUM: 'IM1', STATDES: 'טיוטא', CLOSED: null, IMPFILEITEMS_SUBFORM: [] };
+
+  it.each([
+    ['bonded_receipt_guide', 'bonded_receipt', /סופית/],
+    ['bonded_fill_detail_guide', 'bonded_fill_detail', /./],
+    ['bonded_release_guide', 'bonded_release_draft', /סופית/],
+    ['bonded_line_costs_guide', 'bonded_line_costs', /./],
+  ] as const)('%s names %s and what stays with the owner', async (guide, tool, manual) => {
+    stub(file, []);
+    const h = harness();
+    const r = await h.call(guide, { impfnum: 'IM1' });
+    expect(r.mutates).toBe(false);
+    expect(r.tool).toBe(tool);
+    expect(r.doneBy).toContain(tool);
+    expect(r.stillManual).toMatch(manual);
+    expect(h.descriptions.get(guide)).toContain(tool);
+  });
+
+  it('no guide still says the whole step is done in the screen', async () => {
+    stub(file, []);
+    const h = harness();
+    for (const guide of [
+      'bonded_receipt_guide',
+      'bonded_fill_detail_guide',
+      'bonded_release_guide',
+      'bonded_line_costs_guide',
+    ]) {
+      const r = await h.call(guide, { impfnum: 'IM1' });
+      expect(r.doneBy).not.toBe('the owner, in the screen');
+      expect(h.descriptions.get(guide)).not.toMatch(/Done by the owner in the/);
+    }
+  });
+});
+
 describe('guide descriptions', () => {
   it('none claims the step is impossible over the API', () => {
     const { descriptions } = harness();
