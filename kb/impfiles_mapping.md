@@ -231,6 +231,14 @@ Real broker invoice `GI99210215` on file `IM99075592` (forwarder משלח לדו
 
 ## 8. Procedures — calc / close / reopen / update‑PO‑lines
 
+> **Update 23.11.2026 — names read live from the IMPFILES screen's direct activations (Web SDK, read-only):**
+> `IMPFILE2` חישוב העמסה · `IMPFILE1` סגירת התיק · `OPENIMPFILE` ביטול סגירה של התיק ·
+> `FILL_IMPFILES` מילוי פירוט למחסן ערובה · `UPDPORDERITEMS` עדכון שורות הזמנות רכש. On
+> `DOCUMENTS_J` (קבלות סחורה ממחסן ערובה): `IMPORTCOSTPERLINE` רישום עלויות יבוא לשורה ·
+> `UNFINALDOC` פתיחת תעודה סופית לעריכה. None is run by this server. A field write of
+> `IMPFILES.CLOSED` / `STATDES` and every write to `DOCUMENTS_J` are **blocked** in
+> `src/lib/import-stage-guard.ts`; the text below is the original Phase‑0 note.
+
 **Not yet confirmed as OData actions.** `GetMetadataFor` doesn't enumerate bound actions, and full
 `$metadata` is too large to fetch reliably. Priority "programs/procedures" (חישוב העמסה, סגירת תיק,
 ביטול סגירה) are commonly **UI‑only**, not OData‑exposed. Plan:
@@ -243,6 +251,12 @@ Real broker invoice `GI99210215` on file `IM99075592` (forwarder משלח לדו
 ---
 
 ## 9. Bonded warehouse (Phase 5) — investigation result
+
+> **Update 23.11.2026:** the bonded receipt is an ordinary `DOCUMENTS_P` into `BONDED`/`0`, and the
+> release is `DOCUMENTS_J` (lines `TRANSORDER_J_SUBFORM`, per-line costs in `TRANSIMPFILE_SUBFORM`:
+> `IMPFCOST`, `TOTCOST`, `UDATE`). Both are OData-readable. Some early releases got their
+> per-line costs only later, so the server blocks writing a release until a tool also runs
+> and verifies `IMPORTCOSTPERLINE`. `bonded_line_costs_guide` reads the costs back.
 
 - `IMPFILES.WARHSNAME` is titled **"מחסן ערובה"** and **every file seen uses `BONDED`** → strong evidence
   a bonded warehouse is in use.
@@ -273,7 +287,7 @@ Real broker invoice `GI99210215` on file `IM99075592` (forwarder משלח לדו
 | 8 | `po_match` | `GET PORDERS(key)?$expand=PORDERITEMS,PORDERTRANS,PORDERIV` + file invoices (§4) |
 | 9 | `po_close_lines` | `PATCH PORDERITEMS`/`PORDERS` close flags (procedure‑gated — verify §8) |
 | 10 | `impfile_run_calc` | procedure or UI‑guided + read‑back (§8) |
-| 11 | `impfile_close` / `impfile_reopen` | `PATCH` / procedure + read‑back; blocked unless preflight clean |
+| 11 | `impfile_close` / `impfile_reopen` | read‑only stage check (since 23.11.2026); the close/reopen themselves are the screen procedures `IMPFILE1` / `OPENIMPFILE` |
 | 12 | `impfile_landed_cost` | read Priority result post‑calc; self‑compute fallback from §5/§6 logic |
 | 13 | `impfile_preflight` | 8 checks (§3.7); checks 1 (loading method) advisory — see §1 |
 | 14 | `impfile_expected_costs` | `POST …/EXPIVDUTIES_SUBFORM` |

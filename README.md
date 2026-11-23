@@ -447,7 +447,7 @@ against purchase orders, run pre-close diagnostics, and estimate landed cost. Se
 | `po_close_lines` | Write | Close a purchase order / force-close the remaining balance (procedure-gated) |
 | `impfile_run_calc_guide` | Read | Guidance + state for the loading calc (חישוב העמסה — a screen procedure); `mutates: false` |
 | `impfile_preflight` | Read | 8 pre-close checks → `{ ok, blocking, advisory, info }` |
-| `impfile_close` / `impfile_reopen` | Write | Close (only after a clean preflight) / reopen — **re-reads the file afterwards** and reports whether it actually took |
+| `impfile_close` / `impfile_reopen` | Check | **Never write.** Report which steps of the mandatory order are proven and what is missing; closing and reopening are done in the Priority screen |
 | `impfile_landed_cost` | Read | Value-weighted landed-cost estimate per SKU |
 
 ### Bonded Warehouse — מחסן ערובה (5)
