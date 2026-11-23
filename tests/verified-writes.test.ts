@@ -115,31 +115,16 @@ describe('verified writes', () => {
       await h.call('priority_cancel_order', { orderNumber: 'O1', reason: 'cancel', dryRun: false }),
     ).toMatchObject({ cancelled: false, status: 'unverified' });
   });
-  it('retains acknowledgment on import-file reopen read failure', async () => {
-    const h = harness(registerImpfileTools);
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_url, init) => {
-        if (init.method === 'PATCH') return respond(null, 204);
-        throw new DOMException('timeout', 'TimeoutError');
-      }),
-    );
-    expect(await h.call('impfile_reopen', { impfnum: 'I1', dryRun: false })).toMatchObject({
-      reopened: false,
-      status: 'unverified',
-      acknowledged: true,
-    });
-  });
   it('does not claim import-file header or PO close success after a no-op', async () => {
     const h = harness(registerImpfileTools);
     vi.stubGlobal(
       'fetch',
       vi.fn(async (_url, init) =>
-        init.method === 'PATCH' ? respond(null, 204) : respond({ STATDES: 'old', CLOSEDBOOL: '' }),
+        init.method === 'PATCH' ? respond(null, 204) : respond({ DETAILS: 'old', CLOSEDBOOL: '' }),
       ),
     );
     expect(
-      await h.call('impfile_update', { impfnum: 'I1', status: 'new', dryRun: false }),
+      await h.call('impfile_update', { impfnum: 'I1', details: 'new', dryRun: false }),
     ).toMatchObject({ updated: false, status: 'unverified' });
     expect(await h.call('po_close_lines', { poNumber: 'P1', dryRun: false })).toMatchObject({
       closed: false,

@@ -6,6 +6,8 @@ import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { dateRange } from '../lib/dates.js';
 import { probeForm } from '../lib/forms.js';
+import { computeOfficialSteps } from '../lib/impfile-official.js';
+import { computeStage } from '../lib/impfile-stage.js';
 import {
   VAT_DECLARATION_PART,
   brokerHasLines,
@@ -19,6 +21,7 @@ import {
   preflight,
   reconcileGoodsLines,
 } from '../lib/impfiles-logic.js';
+import { DRAFT_FILE_STATUS } from '../lib/import-stage-guard.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
@@ -36,7 +39,9 @@ import {
   verifyRecordUpdate,
   verifyWrite,
 } from '../lib/write-verification.js';
+import { loadFileFacts } from '../services/import-facts.js';
 import { loadImportRecord, loadSnapshot, normalizeSnapshot } from '../services/import-read.js';
+import { loadStageWithSnapshot } from '../services/import-stage.js';
 
 const IMPFILES = getSchema('IMPFILES');
 
@@ -601,7 +606,8 @@ Expands and aggregates ALL load-bearing sub-forms into a normalized shape:
     'impfile_open',
     `פתיחת תיק יבוא חדש (POST IMPFILES). Open a new import file.
 
-Mandatory in Priority: open date, currency, handler (OWNERLOGIN), status. IMPFNUM is auto-generated.
+Mandatory in Priority: open date, currency, handler (OWNERLOGIN). The file is always opened as a draft
+(טיוטא); IMPFNUM is auto-generated.
 WARHSNAME defaults to your bonded warehouse ('arov') when omitted here — pass it explicitly to be sure.
 
 ⚠️ WRITE. dryRun=true (default) previews the exact POST body.`,
@@ -612,7 +618,6 @@ WARHSNAME defaults to your bonded warehouse ('arov') when omitted here — pass 
         .string()
         .optional()
         .describe('Handler OWNERLOGIN (mandatory in Priority; provide if the create errors)'),
-      status: z.string().default('טיוטא').describe('STATDES (default draft)'),
       supplier: z.string().optional().describe('Goods supplier SUPNAME'),
       forwarder: z.string().optional().describe('Forwarder/broker SUPNAME2'),
       po: z.string().optional().describe('Linked purchase order ORDNAME'),
@@ -627,7 +632,7 @@ WARHSNAME defaults to your bonded warehouse ('arov') when omitted here — pass 
     async (p) => {
       try {
         const body = applyImpfileHeaderFields(
-          { CURDATE: p.date, CODE: p.currency, STATDES: p.status },
+          { CURDATE: p.date, CODE: p.currency, STATDES: DRAFT_FILE_STATUS },
           p,
         );
         const gate = previewOrBlock(config, p.dryRun, 'OPEN IMPORT FILE', body);
@@ -642,7 +647,8 @@ WARHSNAME defaults to your bonded warehouse ('arov') when omitted here — pass 
 
   server.tool(
     'impfile_update',
-    `עדכון כותרת / סטטוס של תיק יבוא (PATCH IMPFILES). Update an import file's header fields.
+    `עדכון כותרת של תיק יבוא (PATCH IMPFILES). Update an import file's header fields. The status
+cannot be changed here: closing and reopening are screen procedures (see impfile_close).
 
 Only the fields you pass are changed. NOTE: country-of-origin is PER-LINE in the customs estimate
 (IMPFILECUSTOMS_SUBFORM), not a header field — Priority defaults it to the supplier's country.
@@ -650,7 +656,6 @@ Only the fields you pass are changed. NOTE: country-of-origin is PER-LINE in the
 ⚠️ WRITE. dryRun=true (default) previews the exact PATCH body.`,
     {
       impfnum: z.string().min(1).describe('IMPFNUM to update'),
-      status: z.string().optional().describe('STATDES'),
       owner: z.string().optional().describe('OWNERLOGIN'),
       supplier: z.string().optional().describe('SUPNAME'),
       forwarder: z.string().optional().describe('SUPNAME2'),
@@ -666,7 +671,6 @@ Only the fields you pass are changed. NOTE: country-of-origin is PER-LINE in the
     async (p) => {
       try {
         const body: Row = {};
-        if (p.status !== undefined) body.STATDES = p.status;
         applyImpfileHeaderFields(body, p);
         if (Object.keys(body).length === 0) {
           return textResult({ error: 'No fields to update — pass at least one header field.' });
@@ -1091,16 +1095,37 @@ Bonded note: a receipt into the bonded warehouse closes the PO balance even befo
     'impfile_preflight',
     `אבחון לפני סגירת תיק יבוא (spec §3.7). Pre-close diagnostics for an import file.
 
-Returns { ok, blocking[], advisory[], info[] }. impfile_close refuses while 'blocking' is non-empty
-(unless overridden). Some checks are ADVISORY because their data isn't API-readable here (loading
-method per cost part; last-calc timestamp).`,
+Returns { ok, blocking[], advisory[], info[], stage, official }. 'stage' says which steps before
+the close are proven (invoices final → receipt into arov → detail → loading calc → release); a
+missing or unreadable step is added to 'blocking'. 'official' is the whole process as Priority's
+SOPs define it (LBI2400273 + LBI2400656), twelve steps from opening the file to the landed cost per
+product, with 'currentStep' = the first step not yet done, 'nextAction', and 'violations' = things
+already done in an order the SOP does not allow. Some checks are ADVISORY because their data isn't
+API-readable here (loading method per cost part; last-calc timestamp).`,
     {
       impfnum: z.string().min(1).describe('IMPFNUM to diagnose'),
     },
     async (p) => {
       try {
-        const snapshot = await loadSnapshot(client, p.impfnum);
-        return textResult({ impfnum: p.impfnum, ...preflight(snapshot) });
+        const { facts, snapshot, receipts } = await loadFileFacts(client, p.impfnum);
+        const stage = computeStage({
+          snapshot,
+          receipts,
+          releases:
+            facts.releases === null
+              ? null
+              : facts.releases.map((r) => ({ DOCNO: r.docno, STATDES: r.status })),
+        });
+        const pf = preflight(snapshot);
+        return textResult({
+          impfnum: p.impfnum,
+          ok: pf.ok && stage.closeBlocking.length === 0,
+          blocking: [...pf.blocking, ...stage.closeBlocking],
+          advisory: [...pf.advisory, ...stage.advisory],
+          info: pf.info,
+          stage,
+          official: computeOfficialSteps(facts),
+        });
       } catch (err) {
         throw toMcpError(err);
       }
@@ -1194,46 +1219,37 @@ Results carry "mutates": false.`,
 
   server.tool(
     'impfile_close',
-    `סגירת תיק יבוא. Close an import file — only after a clean preflight.
+    `בדיקת מוכנות לסגירת תיק יבוא. Is this import file ready to be closed?
 
-Runs impfile_preflight first and refuses to close while blocking issues remain, unless override=true.
-⚠️ PROCEDURE-GATED: closing may be a screen procedure rather than a field write. On a real run this
-tool RE-READS the file after the PATCH and reports whether CLOSED='Y' / STATDES='סופי' actually took —
-a silent no-op on a close is dangerous, so the result's 'closed' flag reflects the re-read, not the
-PATCH's success.
-
-⚠️ WRITE. dryRun=true (default) previews the PATCH.`,
+CHECK ONLY — never changes the file. Closing is done by Assaf in the screen ("סגירת התיק"); this tool
+reports which steps of the mandatory order are proven (invoices final → receipt into arov → detail →
+loading calc) and what is missing. The server blocks every field write of an import file's status.
+Results carry "mutates": false.`,
     {
       impfnum: z.string().min(1),
-      override: z.boolean().default(false).describe('close despite blocking preflight issues'),
-      dryRun: z.boolean().default(true),
+      override: z.boolean().optional().describe('ignored — this tool never writes'),
+      dryRun: z.boolean().optional().describe('ignored — this tool never writes'),
     },
     async (p) => {
       try {
-        const snapshot = await loadSnapshot(client, p.impfnum);
+        const { snapshot, stage } = await loadStageWithSnapshot(client, p.impfnum);
         const pf = preflight(snapshot);
-        if (!pf.ok && !p.override) {
-          return textResult({
-            error: 'Preflight has blocking issues — resolve them or pass override=true.',
-            preflight: pf,
-          });
-        }
-        const body = { CLOSED: 'Y', STATDES: 'סופי' };
-        const gate = previewOrBlock(config, p.dryRun, `CLOSE IMPORT FILE ${p.impfnum}`, {
-          method: 'PATCH',
-          endpoint: client.resolveEntityUrl('IMPFILES', p.impfnum),
-          body,
-          preflight: pf,
-          note: 'Procedure-gated: if Priority rejects the field write, run "סגירת תיק" in the import-file screen, then verify CLOSED=Y via impfile_get.',
-        });
-        if (gate) return gate;
-        const outcome = await verifyRecordUpdate(client, 'IMPFILES', p.impfnum, body);
+        const blocking = [...pf.blocking, ...stage.closeBlocking];
+        const readyToClose = !stage.closed && blocking.length === 0;
+        const nextStep = stage.closed
+          ? 'התיק כבר סגור.'
+          : readyToClose
+            ? 'אסף: להריץ "חישוב העמסה" ואז "סגירת התיק" במסך תיקי יבוא.'
+            : blocking[0];
         return textResult({
-          closed: outcome.verified,
+          mutates: false,
           impfnum: p.impfnum,
-          verifiedAfterWrite: outcome.verification.observed ?? null,
-          expected: outcome.verification.expected,
-          ...outcome,
+          closed: stage.closed,
+          readyToClose,
+          nextStep,
+          blocking,
+          stage,
+          preflight: pf,
         });
       } catch (err) {
         throw toMcpError(err);
@@ -1243,33 +1259,26 @@ PATCH's success.
 
   server.tool(
     'impfile_reopen',
-    `ביטול סגירת תיק יבוא. Reopen a closed import file for corrections.
+    `בדיקה לפני ביטול סגירת תיק יבוא. What reopening this import file involves.
 
-⚠️ PROCEDURE-GATED like close. Previews the PATCH (CLOSED='', STATDES='טיוטא'). After reopening, follow
-the guided sequence: fix → run calc → close → re-run תמחיר if it already ran (spec §3.6).
-
-⚠️ WRITE. dryRun=true (default) previews the PATCH.`,
+CHECK ONLY — never changes the file. Reopening is done by Assaf in the screen ("ביטול סגירה של התיק");
+this tool reports whether the file is closed, whether goods were already released, and the sequence
+to repeat afterwards. Results carry "mutates": false.`,
     {
       impfnum: z.string().min(1),
-      dryRun: z.boolean().default(true),
+      dryRun: z.boolean().optional().describe('ignored — this tool never writes'),
     },
     async (p) => {
       try {
-        const body = { CLOSED: '', STATDES: 'טיוטא' };
-        const gate = previewOrBlock(config, p.dryRun, `REOPEN IMPORT FILE ${p.impfnum}`, {
-          method: 'PATCH',
-          endpoint: client.resolveEntityUrl('IMPFILES', p.impfnum),
-          body,
-          note: 'Procedure-gated: if Priority rejects the field write, run "ביטול סגירת תיק" in the screen. Then: fix → recalc → reclose → re-run תמחיר if needed.',
-        });
-        if (gate) return gate;
-        const outcome = await verifyRecordUpdate(client, 'IMPFILES', p.impfnum, body);
+        const { stage } = await loadStageWithSnapshot(client, p.impfnum);
         return textResult({
-          reopened: outcome.verified,
+          mutates: false,
           impfnum: p.impfnum,
-          verifiedAfterWrite: outcome.verification.observed ?? null,
-          expected: outcome.verification.expected,
-          ...outcome,
+          closed: stage.closed,
+          nextStep: stage.closed
+            ? 'אסף: "ביטול סגירה של התיק" במסך. אחרי התיקון: חישוב העמסה → סגירת התיק → לכל תעודת שחרור סופית של התיק: "פתיחת תעודה סופית לעריכה", סימון "לבצע חישוב חוזר" בכל שורה במסך "עלויות יבוא לשורה", והחזרה לסופית → תמחיר (SOP LBI2400656, שלב ה׳).'
+            : 'התיק פתוח — אין מה לבטל.',
+          stage,
         });
       } catch (err) {
         throw toMcpError(err);

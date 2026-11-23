@@ -14,6 +14,25 @@ node --env-file=.env dist/index.js
 
 The environment file must supply either `PRIORITY_SERVICE_ROOT`, or `PRIORITY_BASE_URL` (through the `.ini` segment) plus company, or `PRIORITY_API_URL` (through `/odata/Priority`) plus environment and company. Precedence is in that order. Authentication prefers `PRIORITY_PAT`; the documented classic and legacy PAT forms also work. Read-only is on by default.
 
+## Hosts that wipe `dist` (self-building start)
+
+`dist` and `node_modules` are git-ignored. On a host that resets ignored files, after a fresh clone,
+or after a `git pull`, start the server with:
+
+```sh
+node scripts/start.mjs
+```
+
+It installs from the lockfile when the dependencies are gone (`npm ci --ignore-scripts`), builds
+when `dist/index.js` is missing or older than `src/`, `package.json` or `tsconfig.json`, and then
+loads `dist/index.js` in the same process. Everything it prints goes to stderr, so the MCP stdio
+stream stays clean. A failed install or build ends the start with exit code 1; it never falls back
+to an old build. Concurrent starts wait for one build (`.build.lock`).
+
+Use the script directly for a stdio server. `npm start` runs the same script, but npm prints its own
+banner to stdout, which corrupts the stdio protocol. A pull followed by a restart is therefore a
+deployment: the next start builds and runs the pulled code.
+
 ## Docker HTTP
 
 Prepare a private `.env` with the connection/authentication and a strong `MCP_HTTP_AUTH_TOKEN`; keep `PRIORITY_READ_ONLY=true` for verification.

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { setTimeout as abortableDelay } from 'node:timers/promises';
 import type { Config } from '../config.js';
+import { assertNoStageViolation } from '../lib/import-stage-guard.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { assertNoProcedureOnlyField, wireBody } from '../lib/procedure-only-fields.js';
 import { type NamedKeys, type RecordKey, validateNamedKeys } from '../lib/record-key.js';
@@ -350,6 +351,8 @@ export class PriorityClient {
     // updateSubformRow) is covered, not only the generic tools.
     const wire = wireBody(body);
     assertNoProcedureOnlyField(method, wire, url);
+    // Import-file status and bonded-release writes are screen procedures — see import-stage-guard.ts.
+    assertNoStageViolation(method, wire, url);
     if (method === 'GET' || this.readOnly)
       return this.sendRequest<T>(url, method, wire, useCache, signal, budget);
     this.readFence.beginWrite();

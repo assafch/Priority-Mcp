@@ -29,7 +29,7 @@
   "scripts": {
     "dev": "node --experimental-strip-types src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "node scripts/start.mjs",
     "web:setup": "npm run build && node dist/web/setup.js",
     "web:start": "node dist/web/index.js",
     "test:web": "vitest run tests/web",

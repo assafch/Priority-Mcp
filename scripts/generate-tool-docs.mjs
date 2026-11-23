@@ -18,7 +18,7 @@ const lines = [
   '',
   'Generic get/update/add-line and attachment tools support validated simple or composite keys. Supply exactly one of `key` or `keys` (attachment tools retain `entityKey` for legacy simple keys). `priority_update_line` updates a validated subform row. Write tools default to preview and preserve read-only policy.',
   '',
-  'Write status separates preview, blocked, verified, unverified, unknown and failed. An acknowledgment is not business completion. Partial scans expose completeness and continuation; bounded results remain valid JSON with omission metadata. Five guide tools do not execute Priority procedures. Twenty-four legacy tools still require validated tenant mappings or procedures.',
+  'Write status separates preview, blocked, verified, unverified, unknown and failed. An acknowledgment is not business completion. Partial scans expose completeness and continuation; bounded results remain valid JSON with omission metadata. Seven guide tools do not execute Priority procedures. Twenty-four legacy tools still require validated tenant mappings or procedures.',
   '',
   '## Discovery examples',
   '',
