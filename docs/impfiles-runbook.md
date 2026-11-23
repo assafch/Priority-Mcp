@@ -64,12 +64,12 @@ real write.
 6. **Close supplied PO lines / balances** — `po_close_lines { poNumber }` (procedure-gated; verify via `po_match`).
 7. **Run the loading calc** — `impfile_run_calc_guide { impfnum }` returns the instruction (the calc is a screen procedure). Run "חישוב העמסה" in Priority.
 8. **Preflight** — `impfile_preflight { impfnum }`. Fix everything in `blocking`; review `advisory`.
-9. **Close the file** — `impfile_close { impfnum }`. Refuses while preflight has blocking issues (override with `override=true` only deliberately).
+9. **Close the file** — Assaf runs "סגירת התיק" in the import-file screen. `impfile_close { impfnum }` only reports readiness (`readyToClose`, `nextStep`, `stage`); it never writes.
 10. **Landed cost** — `impfile_landed_cost { impfnum }` for the value-weighted estimate; the authoritative figure is the product cost after תמחיר.
 
 **Corrections (storno / credit — §3.6):** a cancelled/credit invoice does NOT auto-detach.
 `impfile_preflight` flags it as *blocking*. Either detach the original (clear its IMPFNUM) or link the
-credit note, then: reopen (`impfile_reopen`) → fix → recalc → reclose → re-run תמחיר if it already ran.
+credit note, then: Assaf reopens in the screen ("ביטול סגירה של התיק"; `impfile_reopen` only reports the state) → fix → recalc → reclose → re-run תמחיר if it already ran.
 
 ---
 
@@ -84,13 +84,16 @@ tools guide the sequence and verify state by read-back.
 3. `bonded_receipt_guide { impfnum }` — guide receiving goods into the bonded holding location (this
    closes the PO balance even before release). Read-back shows the goods content.
 4. `bonded_fill_detail_guide { impfnum }` — guide filling the pallet/contents detail (תכולה במחסני ערובה).
-5. **Close the file** (`impfile_close`).
+5. **Close the file** — in the screen; check readiness first with `impfile_close`.
 6. `bonded_release_guide { impfnum }` — guide the release against a rishumon (on the מכס part, partial
    supported, with per-line import costs + additional-costs %). Read-back shows unreleased qty remaining
    and enforces that the file is closed.
 7. `bonded_line_costs_guide { impfnum }` — guide registering per-line import costs (file must be closed).
 
-Editing after a partial release: `impfile_reopen` → add → `impfile_close`.
+Editing after a partial release: reopen in the screen → add → close in the screen.
+
+After every release: run "רישום עלויות יבוא לשורה" on the release, then verify with
+`bonded_line_costs_guide` (`linesWithoutCost` must be 0), then תמחיר.
 
 ---
 
@@ -134,6 +137,10 @@ decreases on release and that line-costs is refused while the file is open.
 
 ## 6. Open items / caveats
 
+0. **Stage lock (23.11.2026)** — the server refuses any field write of an import file's status
+   (`CLOSED` / `STATDES`) and any write to a bonded release (`DOCUMENTS_J`), for every tool and script
+   (`src/lib/import-stage-guard.ts`). `impfile_close` / `impfile_reopen` are read-only checks; the
+   scenarios in §5 that close, reopen or release are done in the screen.
 1. **Procedure-gated writes** — `po_close_lines`, `impfile_close`, `impfile_reopen`, and the loading
    calc may require the Priority screen procedure rather than a field PATCH. The tools preview the
    PATCH and, if Priority rejects it, guide the screen step + verify by read-back. Confirm on the first

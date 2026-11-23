@@ -51,7 +51,7 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `priority_resolve_entity` | generic | read | implemented |
 | `priority_update_line` | generic | write | implemented |
 | `priority_update_record` | generic | write | implemented |
-| `impfile_close` | impfiles | write | implemented |
+| `impfile_close` | impfiles | guide | implemented |
 | `impfile_expected_costs` | impfiles | write | implemented |
 | `impfile_get` | impfiles | read | implemented |
 | `impfile_landed_cost` | impfiles | read | implemented |
@@ -59,7 +59,7 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `impfile_manual_alloc` | impfiles | write | implemented |
 | `impfile_open` | impfiles | write | implemented |
 | `impfile_preflight` | impfiles | read | implemented |
-| `impfile_reopen` | impfiles | write | implemented |
+| `impfile_reopen` | impfiles | guide | implemented |
 | `impfile_run_calc_guide` | impfiles | guide | implemented |
 | `impfile_search` | impfiles | read | implemented |
 | `impfile_update` | impfiles | write | implemented |
@@ -125,7 +125,7 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 
 Generic get/update/add-line and attachment tools support validated simple or composite keys. Supply exactly one of `key` or `keys` (attachment tools retain `entityKey` for legacy simple keys). `priority_update_line` updates a validated subform row. Write tools default to preview and preserve read-only policy.
 
-Write status separates preview, blocked, verified, unverified, unknown and failed. An acknowledgment is not business completion. Partial scans expose completeness and continuation; bounded results remain valid JSON with omission metadata. Five guide tools do not execute Priority procedures. Twenty-four legacy tools still require validated tenant mappings or procedures.
+Write status separates preview, blocked, verified, unverified, unknown and failed. An acknowledgment is not business completion. Partial scans expose completeness and continuation; bounded results remain valid JSON with omission metadata. Seven guide tools do not execute Priority procedures. Twenty-four legacy tools still require validated tenant mappings or procedures.
 
 ## Discovery examples
 
