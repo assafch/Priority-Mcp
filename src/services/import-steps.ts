@@ -22,7 +22,7 @@ import {
   reconcileImportCosts,
 } from '../lib/impfile-official.js';
 import { runWithReleaseDraftScope } from '../lib/import-stage-guard.js';
-import { type PhaseBStep, gate, gateWarnings } from '../lib/import-step-gates.js';
+import { type ImportStep, type PhaseBStep, gate, gateWarnings } from '../lib/import-step-gates.js';
 import { describeError } from '../lib/invoice-close.js';
 import { escapeODataString } from '../lib/sanitize.js';
 import {
@@ -45,7 +45,7 @@ import { type LoadedFileFacts, isEmptyVatReleaseLine, loadFileFacts } from './im
  * Nothing here makes a document final, closes an invoice or a file, or runs the costing: those
  * cannot be undone over the API and stay with the owner (phase C).
  */
-type Row = Record<string, unknown>;
+export type Row = Record<string, unknown>;
 
 export type StepStatus =
   /** dryRun: the plan, nothing sent */
@@ -75,7 +75,7 @@ export interface PlannedWrite {
 
 export interface StepOutcome {
   status: StepStatus;
-  step: PhaseBStep;
+  step: ImportStep;
   impfnum: string;
   /** false until this tool passed a supervised run on a real file (see the runbook) */
   piloted: boolean;
@@ -98,16 +98,18 @@ export interface StepDeps {
   endTimeoutMs?: number;
 }
 
-const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-const rows = (v: unknown): Row[] =>
+export const str = (v: unknown): string | null =>
+  typeof v === 'string' && v.trim() ? v.trim() : null;
+export const num = (v: unknown): number | null =>
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+export const rows = (v: unknown): Row[] =>
   Array.isArray(v) ? (v.filter((x) => x && typeof x === 'object') as Row[]) : [];
 const dayOf = (v: unknown): string | null => str(v)?.slice(0, 10) ?? null;
 /** A line that stands for goods: not the VAT-from-declaration line, not a zeroed duplicate. */
-const isProductLine = (l: Row): boolean =>
+export const isProductLine = (l: Row): boolean =>
   !!str(l.PARTNAME) && str(l.PARTNAME) !== VAT_DECLARATION_PART && num(l.TQUANT) !== 0;
 /** Carriage billed on a goods invoice; Priority does not pull it into a receipt. */
-const CARRIAGE_PART = '000';
+export const CARRIAGE_PART = '000';
 
 /**
  * A write Priority definitely rejected: nothing was created or changed. A 4xx from Priority is
@@ -115,7 +117,7 @@ const CARRIAGE_PART = '000';
  * and then timed out, was cancelled, or whose answer could not be read. Those are ambiguous, like
  * a 5xx: the document may exist.
  */
-const definitelyRejected = (err: unknown): boolean =>
+export const definitelyRejected = (err: unknown): boolean =>
   err instanceof PriorityError &&
   err.statusCode >= 400 &&
   err.statusCode < 500 &&
@@ -126,7 +128,7 @@ const definitelyRejected = (err: unknown): boolean =>
  * Which tools passed their supervised pilot on a real file (runbook, "Mark piloted"). Change a
  * value only after a clean pilot plus clean read-back checks, together with the runbook table.
  */
-export const PILOTED: Record<PhaseBStep, boolean> = {
+export const PILOTED: Record<ImportStep, boolean> = {
   declaration: true, // 2026-11-23, an open file at step 2
   // First pilot file, 2026-11-23 (one product, duty-free, GBP, full release); see the runbook table.
   receipt: true,
@@ -134,6 +136,11 @@ export const PILOTED: Record<PhaseBStep, boolean> = {
   calc: true,
   releaseDraft: true, // needed the VAT line deleted by hand; the code now ignores an empty one
   lineCosts: true,
+  // Phase C (irreversible; approval code from the preview). Not piloted yet.
+  receiptFinal: false,
+  close: false,
+  releaseFinal: false,
+  costing: false,
 };
 
 /**
@@ -151,7 +158,7 @@ async function formAnswers(client: PriorityClient, form: string, key: string): P
 }
 
 /** The refusal reason when a form's reads come back empty, or null when it answers. */
-async function blindReason(
+export async function blindReason(
   client: PriorityClient,
   form: string,
   key: string,
@@ -167,7 +174,7 @@ async function blindReason(
     : `${form} החזיר רשימה ריקה גם בקריאה בלי סינון, ולכן אי אפשר לסמוך על קריאה ריקה ממנו עכשיו. לא נשלח דבר; מנסים שוב בעוד כמה דקות.`;
 }
 
-function outcomes(step: PhaseBStep, impfnum: string) {
+export function outcomes(step: ImportStep, impfnum: string) {
   const base = { step, impfnum, piloted: PILOTED[step] };
   return {
     refused: (reasons: string[], extra: Row = {}): StepOutcome => ({
@@ -243,16 +250,16 @@ function outcomes(step: PhaseBStep, impfnum: string) {
  * record. Nothing awaits in here, so two calls in one process cannot both pass. Returns the
  * outcome to return right away, or `release` to call when the write and its re-read are over.
  */
-function beginStep(
+export function beginStep(
   out: ReturnType<typeof outcomes>,
   ledgerPath: string,
-  record: Omit<StepRecord, 'phase'>,
+  record: Omit<StepRecord, 'phase' | 'step'> & { step: ImportStep },
   now: number,
-  opts: { cooldown: boolean },
+  opts: { cooldown: boolean; windowMs?: number },
 ): { stop: StepOutcome } | { release: () => void } {
   let claim: ReturnType<typeof claimStep>;
   try {
-    claim = claimStep(ledgerPath, record.impfnum, record.step, now);
+    claim = claimStep(ledgerPath, record.impfnum, record.step, now, opts.windowMs);
   } catch (err) {
     return {
       stop: out.notDone(
@@ -263,7 +270,7 @@ function beginStep(
   }
   if (!claim.ok) return { stop: out.refused([claim.reason]) };
   if (opts.cooldown) {
-    const cooling = cooldownReason(ledgerPath, record.impfnum, record.step, now);
+    const cooling = cooldownReason(ledgerPath, record.impfnum, record.step, now, opts.windowMs);
     if (cooling) {
       claim.release();
       return { stop: out.refused([cooling]) };
@@ -284,7 +291,7 @@ function beginStep(
 }
 
 /** Record after a write was dispatched: a ledger failure must never hide the outcome. */
-function recordAfter(path: string, record: StepRecord, outcome: StepOutcome): StepOutcome {
+export function recordAfter(path: string, record: StepRecord, outcome: StepOutcome): StepOutcome {
   try {
     recordStep(path, record);
     return outcome;
@@ -293,7 +300,7 @@ function recordAfter(path: string, record: StepRecord, outcome: StepOutcome): St
   }
 }
 
-async function readFacts(
+export async function readFacts(
   client: PriorityClient,
   impfnum: string,
 ): Promise<LoadedFileFacts | { error: string }> {
@@ -305,10 +312,10 @@ async function readFacts(
 }
 
 const PINVOICE_KEYS = (ivnum: string) => ({ IVNUM: ivnum, DEBIT: 'D', IVTYPE: 'P' });
-const INVOICE_LINES = 'PINVOICEITEMS_SUBFORM';
+export const INVOICE_LINES = 'PINVOICEITEMS_SUBFORM';
 
 /** One supplier invoice with its lines; null when it does not exist. Throws when the read fails. */
-async function readInvoice(client: PriorityClient, ivnum: string): Promise<Row | null> {
+export async function readInvoice(client: PriorityClient, ivnum: string): Promise<Row | null> {
   const qb = new ODataBuilder()
     .filter(`IVNUM eq '${escapeODataString(ivnum)}' and DEBIT eq 'D' and IVTYPE eq 'P'`)
     .expand(`${INVOICE_LINES}($select=KLINE,PARTNAME,TQUANT,CUSTOMSNUM,CUSTOMSDATE)`)
@@ -570,7 +577,7 @@ export interface ReceiptParams {
 }
 
 const RECEIPT_KEYS = (docno: string) => ({ DOCNO: docno, TYPE: 'P' });
-const RECEIPT_LINES = 'TRANSORDER_P_SUBFORM';
+export const RECEIPT_LINES = 'TRANSORDER_P_SUBFORM';
 /** Local dates run ahead of UTC by at most this much; beyond it a date is in the future. */
 const MAX_ZONE_AHEAD_MS = 14 * 3_600_000;
 
@@ -582,7 +589,7 @@ function futureDate(date: string, now: number): string | null {
     : null;
 }
 
-async function readReceiptDocs(
+export async function readReceiptDocs(
   client: PriorityClient,
   by: { ivnum: string } | { docno: string },
 ): Promise<Row[]> {
@@ -611,7 +618,7 @@ function sumByPart(lines: Row[], field: string): Map<string, number> {
 
 /**
  * Create (or continue) a DRAFT receipt of the goods invoice into the bonded warehouse, with the
- * invoice quantities. Making it final stays with the owner.
+ * invoice quantities. bonded_receipt_finalize makes it final, with the owner's approval code.
  */
 export async function createBondedReceipt(
   client: PriorityClient,
@@ -946,7 +953,7 @@ export async function createBondedReceipt(
           lines: afterLines.map((l) => ({ part: l.PARTNAME, qty: l.TQUANT })),
           sent,
           warnings,
-          nextStep: 'אסף: לשנות את סטטוס הקבלה לסופית במסך "קבלות סחורה מספק".',
+          nextStep: 'bonded_receipt_finalize: תצוגה מקדימה, ואחרי אישור אסף — הקבלה לסופית.',
         },
       ),
     );
@@ -984,10 +991,11 @@ const PROGRAM_TITLES: Record<string, string> = {
   FILL_IMPFILES: 'מילוי פירוט למחסן ערובה',
   IMPFILE2: 'חישוב העמסה',
   IMPORTCOSTPERLINE: 'רישום עלויות יבוא לשורה',
+  IMPFILE1: 'סגירת התיק',
 };
 
 /** The SDK row of the import-file form must be this file, and open. */
-function openFileRow(impfnum: string): ActivationSpec['checkRow'] {
+export function openFileRow(impfnum: string): ActivationSpec['checkRow'] {
   return (row) => {
     if (row.IMPFNUM !== impfnum) return `IMPFNUM ${String(row.IMPFNUM)}`;
     if (row.CLOSED === 'Y') return 'CLOSED Y — התיק סגור';
@@ -995,13 +1003,13 @@ function openFileRow(impfnum: string): ActivationSpec['checkRow'] {
   };
 }
 
-const sdkTimeouts = (deps: StepDeps) => ({
+export const sdkTimeouts = (deps: StepDeps) => ({
   ...(deps.stepTimeoutMs ? { stepTimeoutMs: deps.stepTimeoutMs } : {}),
   ...(deps.endTimeoutMs ? { endTimeoutMs: deps.endTimeoutMs } : {}),
 });
 
 /** Preview of a program run; with `probe` the row is also located through the SDK, read-only. */
-async function programPreview(
+export async function programPreview(
   out: ReturnType<typeof outcomes>,
   spec: ActivationSpec,
   p: { probe?: boolean },
@@ -1046,15 +1054,23 @@ async function programPreview(
  * Dispatch one program, with the ledger around it. Returns the outcome to return right away, or
  * the trace of a program that ran to its end and now has to be verified by re-reading.
  */
-async function dispatchProgram(args: {
+export async function dispatchProgram(args: {
   out: ReturnType<typeof outcomes>;
-  step: PhaseBStep;
+  step: ImportStep;
   impfnum: string;
   docno?: string;
   spec: ActivationSpec;
   deps: StepDeps;
   ledgerPath: string;
   now: () => number;
+  /**
+   * Last check right before the program is activated, with the claim held: return an outcome to
+   * stop (nothing is dispatched, the attempt is recorded as failed), or null to go on. The phase-C
+   * tools spend their approval code here, so a refusal earlier never spends it.
+   */
+  beforeDispatch?: () => StepOutcome | null;
+  /** Replaces the acceptPrompts advice in a cancelled result (for tools without acceptPrompts). */
+  cancelHint?: string;
 }): Promise<{ stop: StepOutcome } | { trace: ActivationTrace }> {
   const { out, step, impfnum, docno, spec, deps, ledgerPath } = args;
   const program = spec.activation;
@@ -1077,6 +1093,18 @@ async function dispatchProgram(args: {
     cooldown: true,
   });
   if ('stop' in begun) return { stop: { ...begun.stop, program } };
+
+  const veto = args.beforeDispatch?.() ?? null;
+  if (veto) {
+    begun.release();
+    return {
+      stop: recordAfter(
+        ledgerPath,
+        { impfnum, step, phase: 'failed', docno, detail: 'stopped before dispatch' },
+        { ...veto, program },
+      ),
+    };
+  }
 
   let trace: ActivationTrace;
   try {
@@ -1117,7 +1145,7 @@ async function dispatchProgram(args: {
         { impfnum, step, phase: 'failed', docno, detail: trace.error },
         out.notDone(
           'cancelled',
-          `התוכנית "${title}" הציגה שאלה או מסך קלט שלא נצפו מראש, והכלי ביטל אותה בלי לענות (${trace.error ?? ''}). הצעדים מפורטים ב-procedure.steps. קוראים את התיק מחדש כדי לראות אם משהו השתנה. אזהרה מאשרים רק אחרי שאסף ראה את הטקסט שלה ואישר אותו: אז מעבירים את הטקסט המדויק ב-acceptPrompts. הודעת שגיאה או מסך קלט אינם מאושרים כך.`,
+          `התוכנית "${title}" הציגה שאלה או מסך קלט שלא נצפו מראש, והכלי ביטל אותה בלי לענות (${trace.error ?? ''}). הצעדים מפורטים ב-procedure.steps. קוראים את התיק מחדש כדי לראות אם משהו השתנה. ${args.cancelHint ?? 'אזהרה מאשרים רק אחרי שאסף ראה את הטקסט שלה ואישר אותו: אז מעבירים את הטקסט המדויק ב-acceptPrompts. הודעת שגיאה או מסך קלט אינם מאושרים כך.'}`,
           { program, procedure: trace },
         ),
       ),
@@ -1140,7 +1168,7 @@ async function dispatchProgram(args: {
 }
 
 /** What the program said against itself at its end, or null when it ended silently. */
-const programComplaint = (trace: ActivationTrace | undefined): string | null =>
+export const programComplaint = (trace: ActivationTrace | undefined): string | null =>
   trace && (trace.outcome === 'end-with-message' || trace.error) ? (trace.error ?? null) : null;
 
 /** Compare the file's content with the product lines of its goods invoices, part by part. */
@@ -1474,7 +1502,7 @@ export async function runLoadingCalc(
         customsEstimateLines,
         stage: stageSummary,
         note: 'לפי הנוהל מריצים שוב אחרי כל שינוי בתיק (חשבונית, תכולה, עלות), ובכל מקרה לפני "סגירת התיק".',
-        nextStep: 'impfile_close לבדיקת מוכנות, ואז אסף: "סגירת התיק" במסך תיקי יבוא.',
+        nextStep: 'impfile_close_run ("סגירת התיק"): תצוגה מקדימה, ואחרי אישור אסף — סגירה.',
       },
     ),
   );
@@ -1498,9 +1526,12 @@ export interface ReleaseDraftParams {
 }
 
 const RELEASE_KEYS = (docno: string) => ({ DOCNO: docno, TYPE: 'J' });
-const RELEASE_LINES = 'TRANSORDER_J_SUBFORM';
+export const RELEASE_LINES = 'TRANSORDER_J_SUBFORM';
 
-async function readReleaseDoc(client: PriorityClient, docno: string): Promise<Row | undefined> {
+export async function readReleaseDoc(
+  client: PriorityClient,
+  docno: string,
+): Promise<Row | undefined> {
   const qb = new ODataBuilder()
     .filter(`DOCNO eq '${escapeODataString(docno)}'`)
     .select('DOCNO', 'STATDES', 'DOCREF', 'IMPFNUM', 'CURDATE', 'TOWARHSNAME', 'TOLOCNAME')
@@ -1697,7 +1728,7 @@ export async function createReleaseDraft(
           documentStatus: current.STATDES,
           lines: describeLines(lines),
           ...(plan.ignoredVat ? { warnings: [vatWarning(continues, plan.ignoredVat)] } : {}),
-          nextStep: 'bonded_line_costs על התעודה, ואז אסף משנה את הסטטוס לסופית.',
+          nextStep: 'bonded_line_costs על התעודה, ואז bonded_release_finalize לסופית (באישור אסף).',
         },
       );
     }
@@ -1958,7 +1989,7 @@ export async function createReleaseDraft(
           lines: describeLines(afterLines),
           sent,
           warnings,
-          nextStep: 'bonded_line_costs על התעודה, ואז אסף משנה את הסטטוס לסופית.',
+          nextStep: 'bonded_line_costs על התעודה, ואז bonded_release_finalize לסופית (באישור אסף).',
         },
       ),
     );
@@ -2234,8 +2265,8 @@ export async function registerLineCosts(
               ]),
         ],
         nextStep: isDraft
-          ? 'בודקים את העלות לכל שורה (lines) ואת ההתאמה (reconciliation); אז אסף משנה את סטטוס התעודה לסופית, ואחריו תמחיר לתאריך נוכחי.'
-          : 'אסף: תמחיר לתאריך נוכחי. בדיקה: impfile_cost_report.',
+          ? 'בודקים את העלות לכל שורה (lines) ואת ההתאמה (reconciliation); אז bonded_release_finalize לסופית (באישור אסף), ואחריו costing_run.'
+          : 'costing_run (תמחיר לתאריך נוכחי, באישור אסף). בדיקה: impfile_cost_report.',
       },
     ),
   );

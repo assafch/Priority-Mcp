@@ -695,21 +695,21 @@ export function computeOfficialSteps(facts: FileFacts): OfficialStage {
 }
 
 /**
- * Who performs each step. The reversible steps have an executing tool; the steps that cannot be
- * undone over the API (invoice close, receipt final, file close, release final, costing) stay
- * with the owner.
+ * Who performs each step. Every step has a tool; the ones that cannot be undone (invoice close,
+ * receipt final, file close, release final, costing) run only after the owner approves the tool's
+ * own preview in chat (the last four with the preview's approval code).
  */
 const STEP_ACTOR: Record<number, string> = {
   2: 'מבצע: pinvoice_create / impfile_link_invoice לקישור חשבונית; pinvoice_set_declaration להצהרת היבוא בשורות, כשהחשבונית עוד טיוטה.',
   3: 'מבצע: אסף — סגירת החשבוניות (priority_close_invoice, באישורו לכל חשבונית).',
-  4: 'מבצע: bonded_receipt (קבלה בטיוטה), ואחריו אסף משנה את סטטוס הקבלה לסופית.',
+  4: 'מבצע: bonded_receipt (קבלה בטיוטה), ואחריו bonded_receipt_finalize לסופית — באישור אסף לתצוגה המקדימה.',
   5: 'מבצע: bonded_fill_detail.',
   6: 'מבצע: impfile_run_calc.',
-  7: 'מבצע: אסף — "סגירת התיק" במסך תיקי יבוא (בדיקת מוכנות: impfile_close).',
+  7: 'מבצע: impfile_close_run ("סגירת התיק") — באישור אסף לתצוגה המקדימה (בדיקת מוכנות: impfile_close).',
   8: 'מבצע: bonded_release_draft (תעודת שחרור בטיוטה).',
   9: 'מבצע: bonded_line_costs (על התעודה, כשהיא עוד טיוטה).',
-  10: 'מבצע: אסף — שינוי סטטוס תעודת השחרור לסופית, אחרי בדיקת העלויות לשורה.',
-  11: 'מבצע: אסף — "תמחיר לתאריך נוכחי" (בדיקת מוכנות: impfile_costing_readiness).',
+  10: 'מבצע: bonded_release_finalize (תעודת השחרור לסופית, אחרי בדיקת העלויות לשורה) — באישור אסף לתצוגה המקדימה.',
+  11: 'מבצע: costing_run ("תמחיר לתאריך נוכחי") — באישור אסף לתצוגה המקדימה (בדיקת מוכנות: impfile_costing_readiness).',
   12: 'דוח: impfile_cost_report.',
 };
 

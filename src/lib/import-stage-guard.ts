@@ -20,9 +20,13 @@ import { canonicalFieldName, wireBody } from './procedure-only-fields.js';
  * The check sits in PriorityClient.send, next to the FINAL guard, so every write path is covered:
  * curated tools, generic tools and scripts that import the client.
  *
- * One narrow opening exists: inside runWithReleaseDraftScope the release-draft tool may create a
- * DRAFT release header and set line quantities — nothing else. Status, flags, cost rows, new
- * lines and deletes stay blocked there too.
+ * Two narrow openings exist:
+ *  - inside runWithReleaseDraftScope the release-draft tool may create a DRAFT release header and
+ *    set line quantities — nothing else;
+ *  - inside runWithReleaseFinalScope the release-final tool (bonded_release_finalize, which runs
+ *    only with the owner's approval code and only when every line carries its import costs) may
+ *    PATCH a release HEADER with exactly { STATDES: 'סופית' } — nothing else.
+ * Flags, cost rows, new lines, deletes and every other status stay blocked in both.
  */
 export const IMPORT_STAGE_GUARD_CODE = 'IMPORT_STAGE_GUARD';
 
@@ -38,11 +42,11 @@ const MUTATING = new Set(['POST', 'PATCH', 'PUT', 'MERGE', 'DELETE']);
 const STATUS_FIELDS = new Set(['CLOSED', 'STATDES']);
 
 function statusMessage(method: string, target: string): string {
-  return `Blocked: ${method} ${target} would change an import file's status. Closing and reopening an import file are screen procedures ("סגירת התיק" / "ביטול סגירה של התיק"); a field write skips the checks of the mandatory order (receipt → detail → calc → close → release → line costs → costing). Nothing was sent.`;
+  return `Blocked: ${method} ${target} would change an import file's status. Closing and reopening an import file are procedures ("סגירת התיק" — impfile_close_run, with the owner's approval code / "ביטול סגירה של התיק" in the screen); a field write skips the checks of the mandatory order (receipt → detail → calc → close → release → line costs → costing). Nothing was sent.`;
 }
 
 function releaseMessage(method: string, target: string): string {
-  return `Blocked: ${method} ${target} writes a bonded release (קבלות סחורה ממחסן ערובה). Priority's procedure (SOP LBI2400656, step ד׳ 13–15) is: fill the release, run "רישום עלויות יבוא לשורה" while the file is closed and the release is still a draft, check the costs, and only then set it final. The releases of 2–24.09.2026 were made final without that step and got their costs only on 26.10.2026. A draft release is created only by bonded_release_draft (header and quantities, no status); the costs by bonded_line_costs; making it final is done in the screen. Nothing was sent.`;
+  return `Blocked: ${method} ${target} writes a bonded release (קבלות סחורה ממחסן ערובה). Priority's procedure (SOP LBI2400656, step ד׳ 13–15) is: fill the release, run "רישום עלויות יבוא לשורה" while the file is closed and the release is still a draft, check the costs, and only then set it final. The releases of 2–24.09.2026 were made final without that step and got their costs only on 26.10.2026. A draft release is created only by bonded_release_draft (header and quantities, no status); the costs by bonded_line_costs; making it final only by bonded_release_finalize, with the owner's approval code. Nothing was sent.`;
 }
 
 /** Path segments of a request URL or relative OData path, decoded, without query or fragment. */
@@ -62,6 +66,8 @@ function segmentName(segment: string): string {
 }
 
 const releaseDraftScope = new AsyncLocalStorage<true>();
+const releaseFinalScope = new AsyncLocalStorage<true>();
+const FINAL_RELEASE_STATUS = 'סופית';
 
 /**
  * Run `fn` with the one opening in the release lock: a draft header POST and line-quantity
@@ -70,6 +76,33 @@ const releaseDraftScope = new AsyncLocalStorage<true>();
  */
 export function runWithReleaseDraftScope<T>(fn: () => Promise<T>): Promise<T> {
   return releaseDraftScope.run(true, fn);
+}
+
+/**
+ * Run `fn` with the second opening: one PATCH of a release header to { STATDES: 'סופית' }. Wrap
+ * the single write of bonded_release_finalize, after its checks and its approval code.
+ */
+export function runWithReleaseFinalScope<T>(fn: () => Promise<T>): Promise<T> {
+  return releaseFinalScope.run(true, fn);
+}
+
+/** PATCH …/DOCUMENTS_J(<key>) with a body of exactly { STATDES: 'סופית' }. */
+function isFinalReleaseWrite(
+  verb: string,
+  segments: string[],
+  names: string[],
+  body: unknown,
+): boolean {
+  if (verb !== 'PATCH') return false;
+  const at = names.indexOf('DOCUMENTS_J');
+  if (at !== names.lastIndexOf('DOCUMENTS_J') || at !== names.length - 1) return false;
+  if (!segments[at].includes('(')) return false;
+  const wire = wireBody(body);
+  if (!wire || typeof wire !== 'object' || Array.isArray(wire)) return false;
+  const entries = Object.entries(wire as Record<string, unknown>);
+  return (
+    entries.length === 1 && entries[0][0] === 'STATDES' && entries[0][1] === FINAL_RELEASE_STATUS
+  );
 }
 
 /** The only fields a draft release header may be created with. No status, no lines. */
@@ -132,6 +165,9 @@ export function findStageViolation(
     if (releaseDraftScope.getStore() && isDraftReleaseWrite(verb, segments, names, body)) {
       return null;
     }
+    if (releaseFinalScope.getStore() && isFinalReleaseWrite(verb, segments, names, body)) {
+      return null;
+    }
     return { rule: 'bonded-release', message: releaseMessage(verb, target) };
   }
 
@@ -179,8 +215,8 @@ export function assertNoStageViolation(method: string, body: unknown, target?: s
     400,
     IMPORT_STAGE_GUARD_CODE,
     found.rule === 'impfile-status'
-      ? 'Use impfile_close / impfile_reopen to see what is missing; the close itself is done in the Priority screen.'
-      : 'Use bonded_release_draft to create the draft, bonded_line_costs for the per-line costs and bonded_line_costs_guide to verify them; the status change to final is done in the Priority screen.',
+      ? 'Use impfile_close to see what is missing; the close itself is impfile_close_run (program IMPFILE1), run with the approval code of its own preview after the owner approved it.'
+      : 'Use bonded_release_draft to create the draft, bonded_line_costs for the per-line costs and bonded_line_costs_guide to verify them; the status change to final is bonded_release_finalize, run with the approval code of its own preview after the owner approved it.',
   );
 }
 

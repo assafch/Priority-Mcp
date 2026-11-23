@@ -1,7 +1,11 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { describe, expect, it } from 'vitest';
-import { dependenciesAllowed, effectiveTools } from '../src/lib/tool-profiles.js';
+import {
+  dependenciesAllowed,
+  effectiveTools,
+  operationBudgetMsForTool,
+} from '../src/lib/tool-profiles.js';
 import { createServer } from '../src/server.js';
 import legacyNames from './fixtures/legacy-tool-names.json';
 import { config, logger } from './runtime-fixture.js';
@@ -55,5 +59,15 @@ describe('stable compact discovery', () => {
         ['priority_get_customer'],
       ),
     ).toBe(true);
+  });
+});
+
+describe('step tool budgets', () => {
+  it('gives the phase-C tools three minutes and the costing five', () => {
+    expect(operationBudgetMsForTool('impfile_close_run')).toBe(180_000);
+    expect(operationBudgetMsForTool('bonded_receipt_finalize')).toBe(180_000);
+    expect(operationBudgetMsForTool('bonded_release_finalize')).toBe(180_000);
+    expect(operationBudgetMsForTool('costing_run')).toBe(300_000);
+    expect(operationBudgetMsForTool('priority_query')).toBeUndefined();
   });
 });

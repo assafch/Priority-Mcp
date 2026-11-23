@@ -25,7 +25,7 @@ import { DRAFT_FILE_STATUS } from '../lib/import-stage-guard.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
-import { DEFAULT_STEP_LEDGER_PATH, lastDoneAt } from '../lib/step-ledger.js';
+import { DEFAULT_STEP_LEDGER_PATH, lastDoneAt, recordStep } from '../lib/step-ledger.js';
 import { deleteRowVerified } from '../lib/subform-rows.js';
 import {
   checkWriteAllowed,
@@ -517,6 +517,24 @@ export function registerImpfileTools(
   /** Last confirmed run of "חישוב העמסה" through impfile_run_calc (information only). */
   const lastCalcViaTool = (impfnum: string) =>
     lastDoneAt(deps.stepLedgerPath ?? DEFAULT_STEP_LEDGER_PATH, impfnum, 'calc');
+  /**
+   * Note a write that changes the file (before it is sent, so an unclear result counts too):
+   * impfile_close_run refuses until impfile_run_calc ran again after it. Best effort: a ledger
+   * that cannot be written does not stop the write.
+   */
+  const noteFileChange = (impfnum: string | undefined, tool: string) => {
+    if (!impfnum) return;
+    try {
+      recordStep(deps.stepLedgerPath ?? DEFAULT_STEP_LEDGER_PATH, {
+        impfnum,
+        step: 'fileChange',
+        phase: 'done',
+        detail: { tool },
+      });
+    } catch {
+      // the ledger is advisory here
+    }
+  };
   // --------------------------------------------------------------------- Read
 
   server.tool(
@@ -686,6 +704,7 @@ Only the fields you pass are changed. NOTE: country-of-origin is PER-LINE in the
         }
         const gate = previewOrBlock(config, p.dryRun, `UPDATE IMPORT FILE ${p.impfnum}`, body);
         if (gate) return gate;
+        noteFileChange(p.impfnum, 'impfile_update');
         const outcome = await verifyRecordUpdate(client, 'IMPFILES', p.impfnum, body);
         return textResult({ updated: outcome.verified, importFile: outcome.result, ...outcome });
       } catch (err) {
@@ -874,6 +893,7 @@ Links to the file via header IMPFNUM + OTYPE='P'; DEBIT='D'.
           body,
         );
         if (gate) return gate;
+        noteFileChange(p.impfnum, 'pinvoice_create');
         const outcome = await verifyRecordCreate(client, 'PINVOICES', body);
         client.invalidateCache('IMPFILES'); // the new invoice shows up in the file's snapshot
         return textResult({ created: outcome.verified, invoice: outcome.result, ...outcome });
@@ -974,6 +994,9 @@ invoice already linked to a different file unless allowRelink=true.
           relink: Boolean(currentLink && currentLink !== p.impfnum),
         });
         if (gate) return gate;
+        noteFileChange(p.impfnum, 'impfile_link_invoice');
+        if (currentLink && currentLink !== p.impfnum)
+          noteFileChange(currentLink, 'impfile_link_invoice');
         const outcome = await verifyRecordUpdate(client, 'PINVOICES', keys, body);
         client.invalidateCache('IMPFILES'); // the relink shows up in the file's snapshot
         return textResult({ linked: outcome.verified, invoice: outcome.result, ...outcome });
@@ -1012,6 +1035,7 @@ allocation (or the form's $metadata) before a real write.
           body: p.fields,
         });
         if (gate) return gate;
+        noteFileChange(p.impfnum, 'impfile_manual_alloc');
         const outcome = await verifyLineCreate(client, 'IMPFILES', p.impfnum, subform, p.fields);
         return textResult({ added: outcome.verified, subform, ...outcome });
       } catch (err) {
@@ -1046,6 +1070,7 @@ before a real write.
           body: p.fields,
         });
         if (gate) return gate;
+        noteFileChange(p.impfnum, 'impfile_expected_costs');
         const outcome = await verifyLineCreate(
           client,
           'IMPFILES',
@@ -1232,7 +1257,8 @@ Results carry "mutates": false.`,
     'impfile_close',
     `בדיקת מוכנות לסגירת תיק יבוא. Is this import file ready to be closed?
 
-CHECK ONLY — never changes the file. Closing is done by Assaf in the screen ("סגירת התיק"); this tool
+CHECK ONLY — never changes the file. Closing is done by impfile_close_run ("סגירת התיק"), with the
+owner's approval code from its own preview; this tool
 reports which steps of the mandatory order are proven (invoices final → receipt into arov → detail →
 loading calc) and what is missing. The server blocks every field write of an import file's status.
 Results carry "mutates": false.`,
@@ -1250,7 +1276,7 @@ Results carry "mutates": false.`,
         const nextStep = stage.closed
           ? 'התיק כבר סגור.'
           : readyToClose
-            ? 'impfile_run_calc (חישוב העמסה), ואז אסף: "סגירת התיק" במסך תיקי יבוא.'
+            ? 'impfile_run_calc (חישוב העמסה), ואז impfile_close_run ("סגירת התיק") באישור אסף.'
             : blocking[0];
         return textResult({
           mutates: false,

@@ -95,8 +95,10 @@ const rows: Array<
   ['bonded_fill_detail_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
   ['bonded_line_costs_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
   ['bonded_receipt', 'impfiles', 'write', 'implemented', ['IMPFILES', 'PINVOICES', 'DOCUMENTS_P']],
+  ['bonded_receipt_finalize', 'impfiles', 'write', 'implemented', ['IMPFILES', 'DOCUMENTS_P']],
   ['bonded_receipt_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
   ['bonded_release_draft', 'impfiles', 'write', 'implemented', ['IMPFILES', 'DOCUMENTS_J']],
+  ['bonded_release_finalize', 'impfiles', 'write', 'implemented', ['IMPFILES', 'DOCUMENTS_J']],
   ['bonded_release_guide', 'impfiles-bonded', 'guide', 'implemented', ['IMPFILES']],
   ['bonded_status', 'impfiles-bonded', 'read', 'implemented', ['WAREHOUSES']],
   ['priority_create_credit_memo', 'invoices', 'write', 'implemented', ['AINVOICES']],
@@ -112,6 +114,9 @@ const rows: Array<
   ['bonded_fill_detail', 'procedures', 'write', 'implemented', ['IMPFILES']],
   ['bonded_line_costs', 'procedures', 'write', 'implemented', ['IMPFILES', 'DOCUMENTS_J']],
   ['impfile_run_calc', 'procedures', 'write', 'implemented', ['IMPFILES']],
+  ['impfile_close_run', 'procedures', 'write', 'implemented', ['IMPFILES']],
+  // Company-wide costing program; DOCUMENTS_J is what its readiness check reads.
+  ['costing_run', 'procedures', 'write', 'implemented', ['IMPFILES', 'DOCUMENTS_J']],
   // Same Web SDK as close, but display-mode only. ORDERS and AINVOICES are the probed forms;
   // EINVOICES and the other print forms are accepted without making the tool look unavailable
   // when one of them is not exposed.

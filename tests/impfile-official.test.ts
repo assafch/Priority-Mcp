@@ -349,8 +349,10 @@ describe('nextAction', () => {
     },
   );
 
-  it('step 4 also says that making the receipt final is the owner’s', () => {
-    expect(computeOfficialSteps(opened).nextAction).toMatch(/bonded_receipt.*אסף.*סופית/);
+  it('step 4 names the finalize tool and the owner’s approval', () => {
+    expect(computeOfficialSteps(opened).nextAction).toMatch(
+      /bonded_receipt .*bonded_receipt_finalize.*סופית.*אסף/,
+    );
   });
 
   it.each([

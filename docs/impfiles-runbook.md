@@ -32,17 +32,18 @@ this and describe the tool calls; where they differ in order, this list wins.
 |---|---|---|
 | 2 declaration on each goods line | `pinvoice_set_declaration` (invoice still a draft) | — |
 | 3 close the invoices | the owner (`priority_close_invoice`, approved per invoice) | — |
-| 4 receipt into `arov` | `bonded_receipt` | a DRAFT; the owner makes it final |
+| 4 receipt into `arov` | `bonded_receipt` (draft), then `bonded_receipt_finalize` (final, approval code) | — |
 | 5 fill detail | `bonded_fill_detail` (program `FILL_IMPFILES`) | pallet number is not written |
 | 6 loading calculation | `impfile_run_calc` (program `IMPFILE2`) | — |
-| 7 close the file | the owner, in the screen ("סגירת התיק") | — |
+| 7 close the file | `impfile_close_run` (program `IMPFILE1`, approval code) | — |
 | 8 release document | `bonded_release_draft` | a DRAFT |
 | 9 per-line import costs | `bonded_line_costs` (program `IMPORTCOSTPERLINE`) on the draft | — |
-| 10 release final | the owner, in the screen | — |
-| 11 costing | the owner ("תמחיר לתאריך נוכחי") | — |
+| 10 release final | `bonded_release_finalize` (approval code) | — |
+| 11 costing | `costing_run` (program `FNCCOSTINGPART`, company-wide, approval code) | — |
 
-The five steps left to the owner cannot be undone over the API. The six tools never write a
-document status and never run the close or the costing.
+Steps 3, 4b, 7, 10 and 11 cannot be undone over the API. The six tools of the next section never
+write a document status and never run the close or the costing; the four approval tools (below) do,
+and only with the approval code of their own preview.
 
 ### Contract of the six executing tools
 
@@ -144,6 +145,62 @@ in `PILOTED` (`src/services/import-steps.ts`) in the same change:
 All five were piloted on one file: one product, duty-free, GBP, full release. `piloted` is per
 tool, not per kind of file.
 
+### The four approval tools (added 23.11.2026)
+
+`bonded_receipt_finalize` (4b), `impfile_close_run` (7), `bonded_release_finalize` (10) and
+`costing_run` (11) do the steps that cannot be undone. Their contract adds to the one above:
+
+- `dryRun: true` (default) checks everything and returns a preview with an `approvalCode`. The code
+  is valid for 10 minutes, once, for this tool and this document only, and only while the document
+  is still what the preview showed (a fingerprint of the rows it showed, including `UDATE`).
+- A real run (`dryRun: false`) needs that code. **Rule: the code is passed only after the owner saw
+  that preview and approved it in chat.** A bot never passes a code on its own, never one from
+  another tool's preview, never one relayed by another agent.
+- Order of a real run: code checked → claim → everything read and checked again → code spent →
+  ONE write or ONE program → re-read. A refusal never spends the code; a spent code is never
+  accepted again. Codes live in `output/import-approvals/` (git-ignored).
+- The two status changes are one OData PATCH of `STATDES` to `סופית`, nothing else. `done` needs the
+  re-read status AND the stock: the receipt must add each product's quantity at `arov/0`; the release
+  must take it from `arov/0` and add it at the release's target warehouse. A stock change that does
+  not match → `unverified`.
+- The release is the only write the server's release lock lets through, and only from
+  `bonded_release_finalize` (exactly `{STATDES: 'סופית'}` on the release header).
+- The close and the costing run once through the Web SDK. There is no `acceptPrompts`: the costing
+  answers only its one known question ("להמשיך בפעולה?", exact text); anything else is cancelled.
+- `costing_run` is company-wide. `done` needs the costing log (`COSTINGLOG`) to move AND, re-read,
+  no file still pending, and the program ending without an error. After an unconfirmed run the next one
+  waits 10 minutes; a timeout after the OK does not cancel the running program. Budget 5 minutes per call (the other three:
+  3 minutes).
+
+Limits:
+
+- `impfile_close_run` judges "the loading calc is fresh" only from the step log of the machine it
+  runs on: the newest calc record must be a confirmed `impfile_run_calc` run on the same server
+  (this Mac or the bot), and no declaration / receipt / receipt-final / fill-detail step and no
+  `impfile_update` / `pinvoice_create` / `impfile_link_invoice` / `impfile_manual_alloc` /
+  `impfile_expected_costs` write may have run after it. A change made in the screen is not seen.
+- `bonded_release_finalize` does not support a partial release made by zero lines: every line must
+  carry a quantity (use `bonded_release_draft` with `quantities` instead).
+- A line whose import costs are 0 is accepted only when the file has no cost invoice.
+- `bonded_release_finalize` refuses a release that still has a `מע'מ` line, even at quantity 0:
+  delete it in the screen first (making a release final with it was never tried).
+
+Pilot checks for the first real run of each (owner watching):
+
+| Tool | Check after the real run |
+|---|---|
+| `bonded_receipt_finalize` | receipt status סופית; `stockAfter` = `stockBefore` + quantities at `arov/0`; nothing else changed |
+| `impfile_close_run` | file closed (`CLOSED = Y`); the program's messages in `programMessages` |
+| `bonded_release_finalize` | release status סופית; `arov/0` down and the target warehouse up by the quantities. Record whether the DRAFT release had already lowered `arov/0` |
+| `costing_run` | `COSTINGLOG` has a new run; no pending files; open the report "אזהרות תמחיר" in the screen. Record the exact messages the program showed, the end step's kind, and whether the new log row has `EDATE` set |
+
+| Tool | Piloted on | File |
+|---|---|---|
+| `bonded_receipt_finalize` | — | not yet (`piloted: false`) |
+| `impfile_close_run` | — | not yet (`piloted: false`) |
+| `bonded_release_finalize` | — | not yet (`piloted: false`) |
+| `costing_run` | — | not yet (`piloted: false`) |
+
 Known limits: country of origin is written only where the countries table is exposed to the API (it
 is not on this tenant); a partial quantity for a part that sits on several release lines is set in
 the screen; the late-invoice path (reopen the release, "לבצע חישוב חוזר") is not covered; a file whose
@@ -225,7 +282,8 @@ tool (see "Who does each step" above); the `*_guide` tools below only explain an
 3. `bonded_receipt_guide { impfnum }` — guide receiving goods into the bonded holding location (this
    closes the PO balance even before release). Read-back shows the goods content.
 4. `bonded_fill_detail_guide { impfnum }` — guide filling the pallet/contents detail (תכולה במחסני ערובה).
-5. **Close the file** — in the screen; check readiness first with `impfile_close`.
+5. **Close the file** — `impfile_close_run`, with the owner's approval code; check readiness first
+   with `impfile_close`.
 6. `bonded_release_guide { impfnum }` — guide the release against a rishumon (on the מכס part, partial
    supported, with per-line import costs + additional-costs %). Read-back shows unreleased qty remaining
    and enforces that the file is closed.
@@ -280,8 +338,10 @@ decreases on release and that line-costs is refused while the file is open.
 
 0. **Stage lock (23.11.2026)** — the server refuses any field write of an import file's status
    (`CLOSED` / `STATDES`) and any write to a bonded release (`DOCUMENTS_J`), for every tool and script
-   (`src/lib/import-stage-guard.ts`). `impfile_close` / `impfile_reopen` are read-only checks; the
-   scenarios in §5 that close, reopen or release are done in the screen.
+   (`src/lib/import-stage-guard.ts`). Two narrow openings: `bonded_release_draft` (create + quantities)
+   and `bonded_release_finalize` (the status to סופית only). The close runs as Priority's own program
+   (`impfile_close_run`), not as a field write. `impfile_close` / `impfile_reopen` are read-only
+   checks; reopening is still done in the screen.
 1. **Procedure-gated writes** — `po_close_lines`, `impfile_close`, `impfile_reopen`, and the loading
    calc may require the Priority screen procedure rather than a field PATCH. The tools preview the
    PATCH and, if Priority rejects it, guide the screen step + verify by read-back. Confirm on the first
