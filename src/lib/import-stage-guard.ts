@@ -10,9 +10,11 @@ import { canonicalFieldName, wireBody } from './procedure-only-fields.js';
  *     reopening are the screen procedures "סגירת התיק" (IMPFILE1) and "ביטול סגירה של התיק"
  *     (OPENIMPFILE). A field write skips every check of the mandatory order
  *     (receipt into arov → detail → loading calc → close → release → per-line costs → costing).
- *  2. Any write to a bonded release (DOCUMENTS_J, header or lines). The releases of 2–24.09.2026
- *     got their per-line import costs only on 26.10.2026; a release has to be followed by
- *     "רישום עלויות יבוא לשורה" (IMPORTCOSTPERLINE) and a check, which no tool here does yet.
+ *  2. Any write to a bonded release (DOCUMENTS_J, header or lines). Priority's procedure (SOP
+ *     LBI2400656, step ד׳ 13–15) registers the per-line import costs ("רישום עלויות יבוא לשורה",
+ *     IMPORTCOSTPERLINE) on the release while it is still a draft and the file is closed, and only
+ *     then makes it final. The releases of 2–24.09.2026 were made final without that step and
+ *     got their costs only on 26.10.2026. No tool here does the whole sequence yet.
  *
  * The check sits in PriorityClient.send, next to the FINAL guard, so every write path is covered:
  * curated tools, generic tools and scripts that import the client.
@@ -35,7 +37,7 @@ function statusMessage(method: string, target: string): string {
 }
 
 function releaseMessage(method: string, target: string): string {
-  return `Blocked: ${method} ${target} writes a bonded release (קבלות סחורה ממחסן ערובה). The releases of 2–24.09.2026 got their per-line import costs only on 26.10.2026, so a release must be followed by "רישום עלויות יבוא לשורה" and a check. Releases are done in the screen until a dedicated tool does both. Nothing was sent.`;
+  return `Blocked: ${method} ${target} writes a bonded release (קבלות סחורה ממחסן ערובה). Priority's procedure (SOP LBI2400656, step ד׳ 13–15) is: fill the release, run "רישום עלויות יבוא לשורה" while the file is closed and the release is still a draft, check the costs, and only then set it final. The releases of 2–24.09.2026 were made final without that step and got their costs only on 26.10.2026. Releases are done in the screen until a dedicated tool does all of it. Nothing was sent.`;
 }
 
 /** Path segments of a request URL or relative OData path, decoded, without query or fragment. */

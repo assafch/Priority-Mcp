@@ -61,6 +61,18 @@ describe('computeStage', () => {
     expect(r.closeBlocking.join(' ')).toContain('1/2');
   });
 
+  it('does not expect a customs-estimate row for the VAT line that fill-detail adds to the content', () => {
+    const r = computeStage({
+      ...ready,
+      snapshot: {
+        ...ready.snapshot,
+        goodsContent: [{ PARTNAME: 'P1' }, { PARTNAME: 'P2' }, { PARTNAME: "מע'מ", TQUANT: 0 }],
+      },
+    });
+    expect(r.steps.calcEvidence).toBe('done');
+    expect(r.closeBlocking).toEqual([]);
+  });
+
   it('does not count estimate rows of parts that are not in the content', () => {
     const r = computeStage({
       ...ready,

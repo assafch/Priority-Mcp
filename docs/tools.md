@@ -2,7 +2,7 @@
 
 This catalog describes code, not current tenant permissions. Use `priority_get_capabilities` for policy and dated form-readability evidence; follow `nextSkip`. A successful form probe does not enable an unavailable handler or prove a write.
 
-114 registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
+116 registered definitions. All 105 legacy names remain in the default full profile, subject to allow/block policy. The opt-in operations profile is capped at 25 implemented tools; hidden dependencies still require explicit policy permission. Every tool has risk annotations and an object output schema; JSON text and structured content agree.
 
 | Tool | Domain | Mode | Implementation |
 | --- | --- | --- | --- |
@@ -52,6 +52,8 @@ This catalog describes code, not current tenant permissions. Use `priority_get_c
 | `priority_update_line` | generic | write | implemented |
 | `priority_update_record` | generic | write | implemented |
 | `impfile_close` | impfiles | guide | implemented |
+| `impfile_cost_report` | impfiles | read | implemented |
+| `impfile_costing_readiness` | impfiles | read | implemented |
 | `impfile_expected_costs` | impfiles | write | implemented |
 | `impfile_get` | impfiles | read | implemented |
 | `impfile_landed_cost` | impfiles | read | implemented |

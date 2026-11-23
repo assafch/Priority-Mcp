@@ -60,11 +60,17 @@ export const CALC_ADVISORY =
 
 const text = (value: unknown): string => (typeof value === 'string' ? value.trim() : '');
 
+/**
+ * "מילוי פירוט למחסן ערובה" copies the VAT-from-declaration line of the broker invoice into the
+ * file's content. It is not a product and never gets a customs-estimate row.
+ */
+const VAT_DECLARATION_PART = "מע'מ";
+
 function distinctParts(rows: Array<Record<string, unknown>> | undefined): Set<string> {
   const parts = new Set<string>();
   for (const row of rows ?? []) {
     const part = text(row.PARTNAME);
-    if (part) parts.add(part);
+    if (part && part !== VAT_DECLARATION_PART) parts.add(part);
   }
   return parts;
 }

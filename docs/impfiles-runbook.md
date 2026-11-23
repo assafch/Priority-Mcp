@@ -9,6 +9,23 @@ writes, the bonded-warehouse flow, and the acceptance-test scenarios.
 
 ---
 
+## Official process (added 23.11.2026)
+
+The order below is Priority's own: SOP "תיקי יבוא" (LBI2400273, local copy in the finance docs)
+and "עבודה עם מחסן ערובה" (LBI2400656,
+`https://cdn.priority-software.com/docs/SOP_BondedWarhs_23_1_H.pdf`).
+
+1. open the file → 2. link invoices, with the import declaration and the country of origin on every
+goods line → 3. close the invoices (T→GI) → 4. receipt into `arov` → 5. "מילוי פירוט למחסן ערובה" →
+6. "חישוב העמסה" (review; repeat after every change) → 7. "סגירת התיק" → 8. release document
+(draft) → 9. "רישום עלויות יבוא לשורה" (file closed, release still a draft) → 10. release final →
+11. "תמחיר לתאריך נוכחי" → 12. landed cost per product.
+
+`impfile_preflight` reports where a file stands on these twelve steps (`official`).
+`impfile_cost_report` gives step 12. `impfile_costing_readiness` is the company-wide check before
+step 11. Sections 2–3 below predate this and describe the tool calls; where they differ in order,
+this list wins.
+
 ## 0. Safety model — this build never wrote to Priority
 
 The tools were built and validated **dry-run only** against the live company (`a051014`). Every write

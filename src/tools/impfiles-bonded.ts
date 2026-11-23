@@ -179,9 +179,10 @@ number in "תכולה במחסני ערובה". Returns the step guidance + a re
 ⚠️ Done by Assaf in the screen "קבלות סחורה ממחסן ערובה" (the server blocks writing a release over the
 API); results carry "mutates": false. Release is done on the customs (מכס) part only, against a rishumon (declaration),
 with released quantities (partial supported), the customs-broker invoice, the per-line import costs,
-and the additional-costs %. The FILE MUST BE CLOSED before release, and the release must be followed
-by "רישום עלויות יבוא לשורה". Returns guidance + read-back (unreleased quantity remaining, whether the
-file is closed, and which steps of the mandatory order are proven).`,
+and the additional-costs %. The FILE MUST BE CLOSED before release. Per the SOP (LBI2400656 ד׳
+13–15) "רישום עלויות יבוא לשורה" is run on the release BEFORE it is made final. Returns guidance +
+read-back (unreleased quantity remaining, whether the file is closed, and which steps of the
+mandatory order are proven).`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },
     async (p) => {
       try {
@@ -206,7 +207,8 @@ file is closed, and which steps of the mandatory order are proven).`,
           instructions: [
             'In "קבלות סחורה ממחסן ערובה": select the file + rishumon (declaration) number + the customs-broker invoice (on the מכס part ONLY).',
             'Enter the released quantities (partial allowed), the per-line import costs, and the additional-costs %.',
-            'אחרי סגירת השחרור לסופית: להריץ "רישום עלויות יבוא לשורה" על אותה תעודה, ואז תמחיר.',
+            'לפי ה-SOP (LBI2400656, שלב ד׳ 13–15): להריץ "רישום עלויות יבוא לשורה" כשהתיק סגור והתעודה עדיין טיוטה, לבדוק את העלויות במסך "עלויות יבוא לשורה", ורק אז לשנות את הסטטוס לסופית. אחר כך תמחיר.',
+            'לידיעה: עד 23.11.2026 כל ההרצות של "רישום עלויות יבוא לשורה" בחברה היו על תעודה סופית; הסדר הרשמי (על טיוטה) טרם נוסה כאן.',
             'Editing after a partial release: Assaf reopens the file in the screen ("ביטול סגירה של התיק") → add → close again.',
           ],
           readback: goodsReadback(file.IMPFILEITEMS_SUBFORM),
@@ -225,7 +227,8 @@ CLOSED for the real (screen) operation.
 ⚠️ Done by Assaf in the release screen ("רישום עלויות יבוא לשורה"); results carry "mutates": false.
 Checks the file is closed, returns the step guidance, and READS BACK every release of the file:
 how many released lines carry an import cost and how many do not. Per-line import costs are
-registered only on a CLOSED file (LBI2400656).`,
+registered only on a CLOSED file, and per the SOP (LBI2400656 ד׳ 13–15) before the release is made
+final. For the cost of each product see impfile_cost_report.`,
     { impfnum: z.string().min(1).describe('IMPFNUM') },
     async (p) => {
       try {

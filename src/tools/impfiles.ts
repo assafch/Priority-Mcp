@@ -6,6 +6,8 @@ import type { PriorityClient } from '../client/priority-client.js';
 import type { Config } from '../config.js';
 import { dateRange } from '../lib/dates.js';
 import { probeForm } from '../lib/forms.js';
+import { computeOfficialSteps } from '../lib/impfile-official.js';
+import { computeStage } from '../lib/impfile-stage.js';
 import {
   VAT_DECLARATION_PART,
   brokerHasLines,
@@ -37,6 +39,7 @@ import {
   verifyRecordUpdate,
   verifyWrite,
 } from '../lib/write-verification.js';
+import { loadFileFacts } from '../services/import-facts.js';
 import { loadImportRecord, loadSnapshot, normalizeSnapshot } from '../services/import-read.js';
 import { loadStageWithSnapshot } from '../services/import-stage.js';
 
@@ -1092,16 +1095,27 @@ Bonded note: a receipt into the bonded warehouse closes the PO balance even befo
     'impfile_preflight',
     `אבחון לפני סגירת תיק יבוא (spec §3.7). Pre-close diagnostics for an import file.
 
-Returns { ok, blocking[], advisory[], info[], stage }. 'stage' says which steps of the mandatory
-order are proven (invoices final → receipt into arov → detail → loading calc → release); a missing
-or unreadable step is added to 'blocking'. Some checks are ADVISORY because their data isn't
+Returns { ok, blocking[], advisory[], info[], stage, official }. 'stage' says which steps before
+the close are proven (invoices final → receipt into arov → detail → loading calc → release); a
+missing or unreadable step is added to 'blocking'. 'official' is the whole process as Priority's
+SOPs define it (LBI2400273 + LBI2400656), twelve steps from opening the file to the landed cost per
+product, with 'currentStep' = the first step not yet done, 'nextAction', and 'violations' = things
+already done in an order the SOP does not allow. Some checks are ADVISORY because their data isn't
 API-readable here (loading method per cost part; last-calc timestamp).`,
     {
       impfnum: z.string().min(1).describe('IMPFNUM to diagnose'),
     },
     async (p) => {
       try {
-        const { snapshot, stage } = await loadStageWithSnapshot(client, p.impfnum);
+        const { facts, snapshot, receipts } = await loadFileFacts(client, p.impfnum);
+        const stage = computeStage({
+          snapshot,
+          receipts,
+          releases:
+            facts.releases === null
+              ? null
+              : facts.releases.map((r) => ({ DOCNO: r.docno, STATDES: r.status })),
+        });
         const pf = preflight(snapshot);
         return textResult({
           impfnum: p.impfnum,
@@ -1110,6 +1124,7 @@ API-readable here (loading method per cost part; last-calc timestamp).`,
           advisory: [...pf.advisory, ...stage.advisory],
           info: pf.info,
           stage,
+          official: computeOfficialSteps(facts),
         });
       } catch (err) {
         throw toMcpError(err);
@@ -1261,7 +1276,7 @@ to repeat afterwards. Results carry "mutates": false.`,
           impfnum: p.impfnum,
           closed: stage.closed,
           nextStep: stage.closed
-            ? 'אסף: "ביטול סגירה של התיק" במסך. אחרי התיקון: חישוב העמסה → סגירת התיק → רישום עלויות יבוא לשורה → תמחיר.'
+            ? 'אסף: "ביטול סגירה של התיק" במסך. אחרי התיקון: חישוב העמסה → סגירת התיק → לכל תעודת שחרור סופית של התיק: "פתיחת תעודה סופית לעריכה", סימון "לבצע חישוב חוזר" בכל שורה במסך "עלויות יבוא לשורה", והחזרה לסופית → תמחיר (SOP LBI2400656, שלב ה׳).'
             : 'התיק פתוח — אין מה לבטל.',
           stage,
         });

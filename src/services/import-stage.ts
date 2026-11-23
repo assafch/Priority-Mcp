@@ -13,7 +13,7 @@ import { loadSnapshot } from './import-read.js';
 /** Receipts are looked up by the file's final invoices; more than this many is not a real file. */
 const MAX_INVOICES_IN_FILTER = 40;
 
-async function readReceipts(
+export async function readReceipts(
   client: PriorityClient,
   snapshot: ImpfileSnapshot,
 ): Promise<ReceiptRow[] | null> {
