@@ -8,23 +8,25 @@
 
 <p align="center">
   <strong>Connect AI assistants to Priority ERP</strong><br/>
-  110 tools &middot; schema, help and scoped result resources &middot; 5 workflow prompts
+  126 tools &middot; import files end to end &middot; schema, help and scoped result resources &middot; 5 workflow prompts
 </p>
 
 <p align="center">
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License" /></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg" alt="Node 22.13+" /></a>
-  <a href="#tools-110"><img src="https://img.shields.io/badge/tools-110-blue.svg" alt="110 tools" /></a>
+  <a href="#tools"><img src="https://img.shields.io/badge/tools-126-blue.svg" alt="126 tools" /></a>
+  <a href="#import-files-end-to-end"><img src="https://img.shields.io/badge/import%20files-12%20official%20steps-0d9488.svg" alt="Import files: 12 official steps" /></a>
   <a href="#mcp-prompts-5"><img src="https://img.shields.io/badge/prompts-5-purple.svg" alt="5 prompts" /></a>
 </p>
 
 <p align="center">
-  <a href="#-quick-start">Quick Start</a> &bull;
-  <a href="#-setup-recipes">Setup Recipes</a> &bull;
-  <a href="#%EF%B8%8F-configuration">Configuration</a> &bull;
-  <a href="#tools-110">Tools</a> &bull;
-  <a href="#-deployment">Deployment</a> &bull;
-  <a href="#-priority-setup">Priority Setup</a>
+  <a href="#import-files-end-to-end">Import Files</a> &bull;
+  <a href="#quick-start">Quick Start</a> &bull;
+  <a href="#setup-recipes">Setup Recipes</a> &bull;
+  <a href="#configuration">Configuration</a> &bull;
+  <a href="#tools">Tools</a> &bull;
+  <a href="#deployment">Deployment</a> &bull;
+  <a href="#priority-setup">Priority Setup</a>
 </p>
 
 ---
@@ -42,8 +44,112 @@ Ask your AI assistant things like:
 > *"Give me a morning briefing: new orders, cash position, and low stock alerts"*
 >
 > *"Run a debt collection workflow for customer ACME"*
+>
+> *"Where does import file IM99000001 stand, and what is the next step?"*
 
 Works with **Claude Desktop**, **Claude Code**, **Cursor**, **Windsurf**, and any MCP-compatible client.
+
+---
+
+## Import files, end to end
+
+<p align="center">
+  <img src="docs/assets/import-file-flow.svg" alt="The twelve official steps of an import file, from opening the file to landed cost per item, and the tool that runs each step" width="100%" />
+</p>
+
+<table align="center">
+  <tr>
+    <td align="center"><strong>32</strong><br/><sub>import-file tools</sub></td>
+    <td align="center"><strong>12 of 12</strong><br/><sub>official steps have a tool</sub></td>
+    <td align="center"><strong>6</strong><br/><sub>step tools piloted on a real file</sub></td>
+    <td align="center"><strong>4</strong><br/><sub>irreversible steps behind an approval code</sub></td>
+  </tr>
+</table>
+
+The server has a tool for every step of an import file (תיק יבוא), in Priority's own order, as written in its two
+SOPs: import files (LBI2400273) and the bonded warehouse (LBI2400656). It goes from opening the
+file, through the bonded warehouse, to the landed cost of every product. Ask for it in plain
+language:
+
+> *"Where does import file IM99000001 stand, and what is the next step?"*
+>
+> *"Receive the goods invoice of IM99000001 into the bonded warehouse. Show me the preview first."*
+>
+> *"Is the company ready for a costing run?"*
+>
+> *"What did each product in IM99000001 cost us, landed?"*
+
+### Step by step
+
+| # | Step | Tool | Priority program | Type | Pilot |
+|:-:|:-----|:-----|:-----------------|:-----|:----------------:|
+| 1 | Open the file | `impfile_open` | | Write | |
+| 2 | Link the invoices, declaration on every goods line | `pinvoice_create` · `impfile_link_invoice` · `pinvoice_set_declaration` | | Write | ✅ ¹ |
+| 3 | Close the invoices | `priority_close_invoice` | סגירת חשבונית (`CLOSEANINVOICE`) | **Final**, owner approves | |
+| 4 | Receipt into the bonded warehouse | `bonded_receipt` | | Draft | ✅ |
+| 4b | Receipt final | `bonded_receipt_finalize` | | **Final**, approval code | Not yet |
+| 5 | Fill the bonded detail | `bonded_fill_detail` | מילוי פירוט למחסן ערובה (`FILL_IMPFILES`) | Program | ✅ ² |
+| 6 | Loading calculation | `impfile_run_calc` | חישוב העמסה (`IMPFILE2`) | Program | ✅ |
+| 7 | Close the file | `impfile_close_run` | סגירת התיק (`IMPFILE1`) | **Final**, approval code | Not yet |
+| 8 | Release document (draft) | `bonded_release_draft` | | Draft | ✅ |
+| 9 | Import costs per line | `bonded_line_costs` | רישום עלויות יבוא לשורה (`IMPORTCOSTPERLINE`) | Program | ✅ |
+| 10 | Release final | `bonded_release_finalize` | | **Final**, approval code | Not yet |
+| 11 | Costing, company-wide | `costing_run` | תמחיר לתאריך נוכחי (`FNCCOSTINGPART`) | **Final**, approval code | Not yet |
+| 12 | Landed cost per product | `impfile_cost_report` | | Read | |
+
+<sub>Write, Draft and Program steps preview first. **Final** steps cannot be undone. ¹ The pilot covers `pinvoice_set_declaration`. ² Piloted when the tool zeroed the VAT line; it
+now deletes that line, and the delete has not run live yet. An empty cell means the tool is not
+part of the supervised-pilot list. Every result carries `piloted: true | false`, so an assistant
+knows when a first real run needs the owner watching.</sub>
+
+### What keeps it safe
+
+- **Preview first.** Every write defaults to `dryRun: true`: it checks everything, sends nothing,
+  and returns what it would do.
+- **Order is enforced.** The ten step tools (step 2's declaration and steps 4 to 11) refuse unless
+  the earlier steps are proven in Priority. A repeat of a finished step changes nothing and answers
+  `already-done`. The one exception is the loading calculation, which Priority's SOP repeats after
+  every change to the file.
+- **Done means re-read.** A step tool reports `done` only after it reads Priority again and finds the
+  result. The two final-status steps also check that the stock moved by the right quantities. A run
+  it cannot prove is `unverified`, never `done`.
+- **Priority's own programs, run once.** Programs start through the Web SDK and are never retried.
+  An unexpected question cancels the program; the tool never invents an answer.
+- **An empty read is not trusted.** If a form answers with no rows even unfiltered, the step is
+  `blocked` instead of creating a duplicate.
+
+> [!IMPORTANT]
+> The four steps that cannot be undone (receipt final, file close, release final, costing) need an
+> **approval code**. The preview issues it. It is valid for 10 minutes, once, for that tool and that
+> document only, and only while the document is still what the preview showed. An assistant passes
+> the code only after the owner saw that preview and approved it in chat.
+
+### Reading a file at any moment
+
+| Question | Tool |
+|:---------|:-----|
+| Which files are open, for which supplier or order? | `impfile_search` |
+| What is in this file: invoices, costs, customs estimate, goods, order lines? | `impfile_get` |
+| Where does it stand on the 12 steps, and who does the next one? | `impfile_preflight` |
+| Does ordered = received = invoiced? | `po_match` |
+| Is the company ready for a costing run? | `impfile_costing_readiness` |
+| What did each product cost, landed, and does it tie to the cost invoices? | `impfile_cost_report` |
+
+<details>
+<summary><strong>Known limits</strong></summary>
+
+- The four approval tools are merged and tested offline, but have not yet passed a supervised run
+  on a real file.
+- Country of origin is written only where the countries table is open to the API.
+- A partial quantity for a part that sits on several release lines is set in the Priority screen.
+- A late invoice (reopen the release and recalculate) is not covered.
+- A file whose receipt was entered against purchase-order lines shows step 4 as unknown and
+  continues in the screen.
+- `impfile_close_run` sees only changes made through this server; a change made in the screen
+  after the loading calculation is not seen.
+
+Full contract, pilot protocol and checks: [`docs/impfiles-runbook.md`](docs/impfiles-runbook.md).
+</details>
 
 ---
 
@@ -219,9 +325,9 @@ Identical concurrent cacheable reads share one request. A bounded process-local 
 
 Read [performance and rollout](docs/performance-rollout.md) for limits, measurements, opt-in profile, private aliases, rollback and the separately authorized live pilot. Local offline verification does not establish live ERP speed or model quality.
 
-## Tools (114)
+## Tools
 
-The **unreleased faster/smarter update** retains all 105 legacy tools and adds resolver, typed query preparation, three read workflows, and `priority_close_invoice`. `priority_print_document` brings the catalog to 112; `priority_customer_ledger` and `priority_delete_line` make it 114. The legacy 0.2.0 inventory includes: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, `priority_update_line`, and `priority_print_document`. Generic document operations now accept validated composite keys.
+The **unreleased faster/smarter update** retains all 105 legacy tools and adds resolver, typed query preparation, three read workflows, and `priority_close_invoice`. `priority_print_document` brings the catalog to 112; `priority_customer_ledger` and `priority_delete_line` make it 114. The import-file step, approval and costing tools bring it to **126**. The legacy 0.2.0 inventory includes: 54 implemented read paths, 22 guarded write paths, 5 guides, and 24 handlers that explicitly report unavailable mappings/procedures. Registration is not proof of current tenant support. The authoritative [capability catalog](docs/tools.md) lists every status. New tools: `priority_get_capabilities`, `priority_healthcheck`, `priority_update_line`, and `priority_print_document`. Generic document operations now accept validated composite keys.
 
 ### Official print (1)
 
@@ -426,12 +532,15 @@ Hebrew and spaces are fine inside quotes (values are percent-encoded automatical
 | `priority_get_current_user` | Read | Priority identity (`GetTenantDetails`) + this server's config incl. `serverReadOnly` |
 | `priority_execute_odata_query` | Read | Raw OData escape hatch (prefer `priority_query`) |
 
-### Import Files — תיקי יבוא (15)
+### Import files — תיקי יבוא (32)
 
-Structured handling of import files (IMPFILES): open, link supplier invoices (goods + broker), match
-against purchase orders, run pre-close diagnostics, and estimate landed cost. See
-[`docs/impfiles-runbook.md`](docs/impfiles-runbook.md) for the end-to-end operating procedure and
-[`kb/impfiles_mapping.md`](kb/impfiles_mapping.md) for the live entity/field mapping.
+One tool for every step of Priority's official import-file procedure, plus the reads around it.
+The overview, the step table and the safety model are in
+[Import files, end to end](#import-files-end-to-end). The operating procedure is in
+[`docs/impfiles-runbook.md`](docs/impfiles-runbook.md) and the live entity/field mapping in
+[`kb/impfiles_mapping.md`](kb/impfiles_mapping.md).
+
+#### File, invoices and purchase orders (15)
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|
@@ -446,31 +555,49 @@ against purchase orders, run pre-close diagnostics, and estimate landed cost. Se
 | `po_match` | Read | Three-way match: ordered ↔ received ↔ invoiced, with per-line verdicts |
 | `po_close_lines` | Write | Close a purchase order / force-close the remaining balance (procedure-gated) |
 | `impfile_run_calc_guide` | Read | State of the customs estimate before/after the loading calc; the calc itself is run by `impfile_run_calc`; `mutates: false` |
-| `impfile_preflight` | Read | 8 pre-close checks → `{ ok, blocking, advisory, info }` |
-| `impfile_close` / `impfile_reopen` | Check | **Never write.** Report which steps of the mandatory order are proven and what is missing; closing and reopening are done in the Priority screen |
-| `impfile_landed_cost` | Read | Value-weighted landed-cost estimate per SKU |
+| `impfile_preflight` | Read | Pre-close checks → `{ ok, blocking, advisory, info }`, and where the file stands on the 12 official steps (`official`, `nextAction`) |
+| `impfile_close` / `impfile_reopen` | Check | **Never write.** Report which steps of the mandatory order are proven and what is missing. The close itself is `impfile_close_run`; reopening is done in the Priority screen |
+| `impfile_landed_cost` | Read | Value-weighted landed-cost **estimate** per SKU, before the file is costed |
 
-### Import steps — executing tools (6)
+#### Reversible steps — preview by default (6)
 
-One tool per reversible step of Priority's official import-file procedure (SOP LBI2400273 and
-LBI2400656). Each previews by default (`dryRun: true`), refuses unless the earlier steps are proven,
-changes nothing on a repeat, and reports `done` only from a re-read. None writes a document status:
-making the receipt and the release final, closing invoices and the file, and the costing stay with
-the owner. See the pilot protocol in [`docs/impfiles-runbook.md`](docs/impfiles-runbook.md).
+Each previews by default (`dryRun: true`), refuses unless the earlier steps are proven, changes
+nothing on a repeat (except `impfile_run_calc`, which is meant to be re-run after every change),
+and reports `done` only from a re-read. None writes a document status.
 
 | Tool | Step | Description |
 |:-----|:----:|:------------|
 | `pinvoice_set_declaration` | 2 | Import declaration number + date on every product line of a DRAFT goods invoice |
 | `bonded_receipt` | 4 | Create or continue a DRAFT receipt of the goods invoice into `arov`, with the invoice quantities |
-| `bonded_fill_detail` | 5 | Run "מילוי פירוט למחסן ערובה" (FILL_IMPFILES), zero the VAT line it copies, verify the content |
+| `bonded_fill_detail` | 5 | Run "מילוי פירוט למחסן ערובה" (FILL_IMPFILES), delete the VAT line it copies, verify the content |
 | `impfile_run_calc` | 6 | Run "חישוב העמסה" (IMPFILE2) and verify the customs estimate covers the content |
 | `bonded_release_draft` | 8 | Create or continue a DRAFT release of a closed file: whole balance, or listed parts |
 | `bonded_line_costs` | 9 | Run "רישום עלויות יבוא לשורה" (IMPORTCOSTPERLINE) on the release and return the cost of every line |
 
-### Bonded Warehouse — מחסן ערובה (5)
+#### Irreversible steps — approval code (4)
+
+Each previews by default and issues an `approvalCode` (10 minutes, single use, bound to the tool,
+the document and exactly what the preview showed). A real run needs that code, passed only after
+the owner approved the preview in chat. Not yet piloted on a real file (`piloted: false`).
+
+| Tool | Step | Description |
+|:-----|:----:|:------------|
+| `bonded_receipt_finalize` | 4b | Make the bonded receipt final; `done` needs the status and the stock added at `arov` |
+| `impfile_close_run` | 7 | Run "סגירת התיק" (IMPFILE1); needs a fresh, confirmed loading calculation |
+| `bonded_release_finalize` | 10 | Make the release final; `done` needs the status and the stock moved from `arov` to the target warehouse |
+| `costing_run` | 11 | Run "תמחיר לתאריך נוכחי" (FNCCOSTINGPART), company-wide; `done` needs the costing log to move and no file left pending |
+
+#### Costing reads (2)
+
+| Tool | Type | Description |
+|:-----|:----:|:------------|
+| `impfile_costing_readiness` | Read | Company-wide check before the costing run: blockers and files still pending |
+| `impfile_cost_report` | Read | Landed cost per product of one file, from Priority's own figures, reconciled against the cost invoices |
+
+#### Bonded warehouse — מחסן ערובה (5)
 
 Read-only guides and read-back for the bonded receive→release flow. The steps themselves are done by
-the executing tools above; each guide names its tool and what stays with the owner.
+the step tools above; each guide names its tool and what stays with the owner.
 
 | Tool | Type | Description |
 |:-----|:----:|:------------|
@@ -582,12 +709,14 @@ Only after a human reviews this would you re-issue the call with `"confirm": tru
 
 ## Write Tool Safety
 
-Two independent safety layers protect every write:
+Independent safety layers protect every write:
 
-- **Preview by default** — generic write tools default to `confirm: false` (and the 18 domain write
+- **Preview by default** — generic write tools default to `confirm: false` (and the domain write
   tools default to `dryRun: true`), returning the payload/endpoint without sending anything.
 - **Read-only mode** — set `PRIORITY_READ_ONLY=true` to disable all writes globally (enforced in the
   tool layer *and* in the HTTP client).
+- **Approval codes for what cannot be undone** — the four irreversible import-file steps need the
+  single-use code of their own preview; see [Import files, end to end](#import-files-end-to-end).
 - **Tool allowlist/blocklist** — `PRIORITY_ALLOWED_TOOLS` / `PRIORITY_BLOCKED_TOOLS` control which
   tools are registered at all.
 
@@ -672,7 +801,7 @@ src/
 │   ├── cache.ts          # In-memory LRU with TTL
 │   ├── rate-limit.ts     # Sliding window rate limiter
 │   └── errors.ts         # Priority→MCP error mapping (surfaces status + body)
-├── tools/                # 80 MCP tools — generic.ts (8 building blocks) + 12 domain files
+├── tools/                # 126 MCP tools — generic.ts (building blocks) + one file per domain
 ├── resources/            # 3 MCP resources
 ├── prompts/              # 5 MCP prompts
 └── lib/                  # Shared utilities (write-guard, sanitize, format)
