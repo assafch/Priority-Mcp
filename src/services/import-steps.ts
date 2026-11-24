@@ -915,7 +915,7 @@ export async function createBondedReceipt(
         { receiptLines: afterLines },
       );
     }
-    // "A draft in BONDED" is stated only if the re-read shows exactly that.
+    // "A draft in the bonded warehouse" is stated only if the re-read shows exactly that.
     if (str(after.STATDES) !== DRAFT_DOC_STATUS || str(after.TOWARHSNAME) !== BONDED_WAREHOUSE) {
       return stop(
         `הכמויות בקבלה ${receipt} נכונות, אך היא במחסן "${String(after.TOWARHSNAME)}" ובסטטוס "${String(after.STATDES)}" — ולא טיוטה במחסן ${BONDED_WAREHOUSE}. בודקים במסך.`,

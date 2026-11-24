@@ -288,6 +288,8 @@ All configuration is via environment variables. Validated on startup — the ser
 | `PRIORITY_CUSTOM_PREFIX` | No | — | Prefix for custom entities (e.g. `ORGT_`) |
 | `PRIORITY_CUSTOM_ENTITIES` | No | — | Comma-separated custom entity names |
 | `PRIORITY_READ_ONLY` | No | `true` | Block all write operations |
+| `PRIORITY_BONDED_WAREHOUSE` | For import files | `BONDED` | `WARHSNAME` of your bonded warehouse. The import-file tools check and write this code, so set it to your own |
+| `PRIORITY_RELEASE_WAREHOUSE` | No | `Main` | `WARHSNAME` a bonded release goes to when the caller names none |
 | `PRIORITY_ALLOWED_TOOLS` | No | — | Comma-separated tool allowlist (only these tools are registered) |
 | `PRIORITY_BLOCKED_TOOLS` | No | — | Comma-separated tool blocklist (these tools are not registered) |
 | `CACHE_TTL_SECONDS` | No | `60` | In-memory cache TTL |

@@ -25,6 +25,7 @@ import { DRAFT_FILE_STATUS } from '../lib/import-stage-guard.js';
 import { getSchema } from '../lib/priority-schema.js';
 import { blockProcedureOnlyField } from '../lib/procedure-only-fields.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
+import { BONDED_WAREHOUSE } from '../lib/site-codes.js';
 import { DEFAULT_STEP_LEDGER_PATH, lastDoneAt, recordStep } from '../lib/step-ledger.js';
 import { deleteRowVerified } from '../lib/subform-rows.js';
 import {
@@ -635,7 +636,7 @@ Expands and aggregates ALL load-bearing sub-forms into a normalized shape:
 
 Mandatory in Priority: open date, currency, handler (OWNERLOGIN). The file is always opened as a draft
 (טיוטא); IMPFNUM is auto-generated.
-WARHSNAME defaults to your bonded warehouse ('BONDED') when omitted here — pass it explicitly to be sure.
+WARHSNAME defaults to your bonded warehouse ('${BONDED_WAREHOUSE}') when omitted here — pass it explicitly to be sure.
 
 ⚠️ WRITE. dryRun=true (default) previews the exact POST body.`,
     {
@@ -652,7 +653,10 @@ WARHSNAME defaults to your bonded warehouse ('BONDED') when omitted here — pas
       shipper: z.string().optional().describe('SHIPPERNAME'),
       declaration: z.string().optional().describe('Import declaration CUSTOMSNUM'),
       declarationDate: z.string().optional().describe('CUSTOMSDATE (YYYY-MM-DD)'),
-      warehouse: z.string().optional().describe("Bonded warehouse WARHSNAME (e.g. 'BONDED')"),
+      warehouse: z
+        .string()
+        .optional()
+        .describe(`Bonded warehouse WARHSNAME (e.g. '${BONDED_WAREHOUSE}')`),
       details: z.string().optional().describe('Free-text DETAILS'),
       dryRun: z.boolean().default(true),
     },
@@ -1130,7 +1134,7 @@ Bonded note: a receipt into the bonded warehouse closes the PO balance even befo
     `אבחון לפני סגירת תיק יבוא (spec §3.7). Pre-close diagnostics for an import file.
 
 Returns { ok, blocking[], advisory[], info[], stage, official }. 'stage' says which steps before
-the close are proven (invoices final → receipt into BONDED → detail → loading calc → release); a
+the close are proven (invoices final → receipt into ${BONDED_WAREHOUSE} → detail → loading calc → release); a
 missing or unreadable step is added to 'blocking'. 'official' is the whole process as Priority's
 SOPs define it (LBI2400273 + LBI2400656), twelve steps from opening the file to the landed cost per
 product, with 'currentStep' = the first step not yet done, 'nextAction', and 'violations' = things
@@ -1259,7 +1263,7 @@ Results carry "mutates": false.`,
 
 CHECK ONLY — never changes the file. Closing is done by impfile_close_run ("סגירת התיק"), with the
 owner's approval code from its own preview; this tool
-reports which steps of the mandatory order are proven (invoices final → receipt into BONDED → detail →
+reports which steps of the mandatory order are proven (invoices final → receipt into ${BONDED_WAREHOUSE} → detail →
 loading calc) and what is missing. The server blocks every field write of an import file's status.
 Results carry "mutates": false.`,
     {

@@ -10,7 +10,7 @@ import { canonicalFieldName, wireBody } from './procedure-only-fields.js';
  *  1. A status change of an import file (IMPFILES.CLOSED / IMPFILES.STATDES). Closing and
  *     reopening are the screen procedures "סגירת התיק" (IMPFILE1) and "ביטול סגירה של התיק"
  *     (OPENIMPFILE). A field write skips every check of the mandatory order
- *     (receipt into BONDED → detail → loading calc → close → release → per-line costs → costing).
+ *     (receipt into the bonded warehouse → detail → loading calc → close → release → per-line costs → costing).
  *  2. Any write to a bonded release (DOCUMENTS_J, header or lines). Priority's procedure (SOP
  *     LBI2400656, step ד׳ 13–15) registers the per-line import costs ("רישום עלויות יבוא לשורה",
  *     IMPORTCOSTPERLINE) on the release while it is still a draft and the file is closed, and only

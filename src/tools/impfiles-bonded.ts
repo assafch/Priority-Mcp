@@ -8,11 +8,11 @@ import { VAT_DECLARATION_PART } from '../lib/impfile-official.js';
 import { FINAL_DOC_STATUS } from '../lib/impfile-stage.js';
 import { goodsReadback } from '../lib/impfiles-logic.js';
 import { escapeODataString, sanitizeODataValue } from '../lib/sanitize.js';
+import { BONDED_WAREHOUSE } from '../lib/site-codes.js';
 import { textResult } from '../lib/write-guard.js';
 import { loadStage } from '../services/import-stage.js';
 
 type Row = Record<string, unknown>;
-const BONDED_WAREHOUSE = 'BONDED';
 
 /** Shared closed-gate result for the release / line-costs guidance tools. */
 function fileClosedWarning(
@@ -28,8 +28,8 @@ function fileClosedWarning(
  * by the owner in the Priority screens; these tools GUIDE the exact LBI2400656 sequence and VERIFY
  * state by reading back the warehouse config, the file, its releases and their per-line costs.
  * Writing a release over OData is blocked by the server (src/lib/import-stage-guard.ts). Confirmed
- * live 2026-07-18: 'BONDED' is a type-D bonded warehouse (BONDED='Y'); location '0' is the bonded
- * holding location (excluded from inventory value) and 'RELEASED' is the costed/released location.
+ * live 2026-07-18: the bonded warehouse is a type-D bonded warehouse (BONDED='Y'); location '0' is the bonded
+ * holding location (excluded from inventory value) and a second location is the costed/released location.
  */
 export function registerBondedTools(server: McpServer, client: PriorityClient, _config: Config) {
   const warehouseConfig = async (warehouse: string): Promise<Row[]> => {
@@ -84,7 +84,7 @@ export function registerBondedTools(server: McpServer, client: PriorityClient, _
 
   server.tool(
     'bonded_status',
-    `סטטוס מחסן ערובה. Report a bonded warehouse's configuration (default 'BONDED').
+    `סטטוס מחסן ערובה. Report a bonded warehouse's configuration (default '${BONDED_WAREHOUSE}').
 
 Reads WAREHOUSES: the bonded flag and each location's cost inclusion. The holding location is the one
 NOT in inventory value (inInventoryValue=false); the costed location holds released goods. NOTE: a
@@ -93,7 +93,7 @@ warehouse can be TYPE='D' without being bonded (e.g. the main warehouse) — BON
       warehouse: z
         .string()
         .default(BONDED_WAREHOUSE)
-        .describe("Warehouse WARHSNAME (default 'BONDED')"),
+        .describe(`Warehouse WARHSNAME (default '${BONDED_WAREHOUSE}')`),
     },
     async (p) => {
       try {
@@ -123,7 +123,7 @@ warehouse can be TYPE='D' without being bonded (e.g. the main warehouse) — BON
     'bonded_receipt_guide',
     `קבלת סחורה למחסן ערובה (spec §Phase 5). READ-ONLY GUIDE — does NOT receive anything.
 
-The step itself is done by bonded_receipt, which creates the receipt as a DRAFT (warehouse BONDED,
+The step itself is done by bonded_receipt, which creates the receipt as a DRAFT (warehouse ${BONDED_WAREHOUSE},
 location 0, invoice quantities); bonded_receipt_finalize makes it final, with the owner's approval
 code from its own preview. This guide only explains the step and reads back the file; results carry "mutates":
 false. Receiving into the bonded holding
@@ -142,10 +142,10 @@ even before release. Returns the step guidance + a read-back of the file's goods
             "bonded_receipt (creates the draft receipt); bonded_receipt_finalize makes it final with the owner's approval code",
           stillManual:
             "הבעלים: מאשר בצ'אט את התצוגה המקדימה של bonded_receipt_finalize לפני שהקבלה הופכת לסופית.",
-          screenAction: 'קבלות סחורה מספק (מחסן BONDED, איתור 0)',
+          screenAction: `קבלות סחורה מספק (מחסן ${BONDED_WAREHOUSE}, איתור 0)`,
           warehouse: file.WARHSNAME ?? null,
           instructions: [
-            'bonded_receipt receives the goods invoice into the bonded warehouse (BONDED, bonded holding location) as a draft; the owner then sets the receipt to final.',
+            `bonded_receipt receives the goods invoice into the bonded warehouse (${BONDED_WAREHOUSE}, bonded holding location) as a draft; the owner then sets the receipt to final.`,
             'The receipt keeps the goods out of inventory value until release, and closes the PO balance (reflected by po_match).',
             'Next, once the receipt is final: bonded_fill_detail.',
           ],
