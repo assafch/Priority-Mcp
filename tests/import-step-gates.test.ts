@@ -117,7 +117,9 @@ describe('gate: receipt', () => {
     expect(gate('receipt', facts({ closed: true }))).toEqual([expect.stringMatching(/התיק סגור/)]);
   });
   it('refuses a file whose warehouse is not BONDED', () => {
-    expect(gate('receipt', facts({ warehouse: 'Main' }))).toEqual([expect.stringMatching(/BONDED/)]);
+    expect(gate('receipt', facts({ warehouse: 'Main' }))).toEqual([
+      expect.stringMatching(/BONDED/),
+    ]);
   });
   it('refuses while a goods invoice is still temporary', () => {
     const f = facts({ invoices: [goods({ ivnum: 'T1', isFinal: false }), cost()] });

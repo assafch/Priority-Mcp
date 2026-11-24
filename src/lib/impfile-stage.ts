@@ -1,14 +1,15 @@
 import type { ImpfileSnapshot } from './impfiles-logic.js';
+import { BONDED_WAREHOUSE } from './site-codes.js';
 
 /**
  * Which steps of the mandatory import-file order are proven by Priority data.
  *
- * Order (owner, 26.10.2026): receipt into the bonded warehouse (BONDED) → fill detail → loading
+ * Order (owner, 26.10.2026): receipt into the bonded warehouse → fill detail → loading
  * calc → close file → release → per-line import costs → costing. Pure: no I/O. A document read
  * that failed is passed as null and yields 'unknown', which blocks — a step is never reported
  * as satisfied on missing data.
  */
-export const BONDED_WAREHOUSE = 'BONDED';
+export { BONDED_WAREHOUSE };
 export const FINAL_DOC_STATUS = 'סופית';
 export const DRAFT_DOC_STATUS = 'טיוטא';
 export const CANCELLED_DOC_STATUS = 'מבוטלת';

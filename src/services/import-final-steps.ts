@@ -385,12 +385,12 @@ async function inspectReceipt(
       pquant: num(l.PQUANT),
     })),
   };
-  const BONDED = place(BONDED_WAREHOUSE, '0');
+  const bonded = place(BONDED_WAREHOUSE, '0');
   return {
     kind: 'ok',
     state,
     doc,
-    expected: [...got].map(([part, qty]) => ({ part, place: BONDED, delta: qty })),
+    expected: [...got].map(([part, qty]) => ({ part, place: bonded, delta: qty })),
     extra: { ...base, lines: state.lines.map((l) => ({ part: l.part, qty: l.tquant })) },
   };
 }
@@ -657,10 +657,10 @@ async function inspectRelease(
       .sort((a, b) => Number(a.kline) - Number(b.kline) || a.part.localeCompare(b.part)),
   };
   const target = place(raw.TOWARHSNAME, raw.TOLOCNAME);
-  const BONDED = place(BONDED_WAREHOUSE, '0');
-  if (target === BONDED) {
+  const bonded = place(BONDED_WAREHOUSE, '0');
+  if (target === bonded) {
     return stop(
-      out.refused([`תעודת השחרור ${p.docno} היא אל ${BONDED} עצמו — אין לאן לשחרר.`], base),
+      out.refused([`תעודת השחרור ${p.docno} היא אל ${bonded} עצמו — אין לאן לשחרר.`], base),
     );
   }
   const qty = sumBy(goods, 'TQUANT');
@@ -669,7 +669,7 @@ async function inspectRelease(
     state,
     doc: raw,
     expected: [...qty].flatMap(([part, n]) => [
-      { part, place: BONDED, delta: -n },
+      { part, place: bonded, delta: -n },
       { part, place: target, delta: n },
     ]),
     extra: {
@@ -713,7 +713,7 @@ export async function finalizeBondedRelease(
     places,
     what: `תעודת השחרור ${p.docno}`,
     next: 'costing_run (תמחיר לתאריך נוכחי) — תצוגה מקדימה, ואישור הבעלים.',
-    note: 'לא נבדק עדיין אם טיוטת שחרור כבר מורידה את היתרה ב-BONDED; הפיילוט הראשון רושם מה קרה למלאי (stockBefore / stockAfter).',
+    note: `לא נבדק עדיין אם טיוטת שחרור כבר מורידה את היתרה ב-${BONDED_WAREHOUSE}; הפיילוט הראשון רושם מה קרה למלאי (stockBefore / stockAfter).`,
   });
 }
 

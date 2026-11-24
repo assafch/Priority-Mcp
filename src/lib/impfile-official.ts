@@ -1,3 +1,4 @@
+import { BONDED_WAREHOUSE } from './site-codes.js';
 /**
  * The import-file process exactly as Priority's own SOPs define it, as pure functions over facts
  * read from Priority. No I/O here.
@@ -22,7 +23,7 @@
  * reported as done on missing data.
  */
 
-export const BONDED_WAREHOUSE = 'BONDED';
+export { BONDED_WAREHOUSE };
 export const FINAL_DOC_STATUS = 'סופית';
 export const DRAFT_DOC_STATUS = 'טיוטא';
 export const CANCELLED_DOC_STATUS = 'מבוטלת';

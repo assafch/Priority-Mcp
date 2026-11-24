@@ -4,6 +4,7 @@ import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import { WebSdkSession, deriveWebSdkLoginConfig, loadWebSdk } from '../client/web-sdk.js';
 import type { Config } from '../config.js';
+import { BONDED_WAREHOUSE, DEFAULT_RELEASE_WAREHOUSE } from '../lib/site-codes.js';
 import { textResult } from '../lib/write-guard.js';
 import {
   type StepDeps,
@@ -114,12 +115,12 @@ ${COMMON}`,
   server.tool(
     'bonded_receipt',
     `שלב 4 — קבלת הסחורה למחסן הערובה, בטיוטה. Creates (or continues) a DRAFT goods receipt
-(קבלות סחורה מספק, DOCUMENTS_P) of the file's final goods invoice into warehouse BONDED, location 0,
-and sets every line to the invoice quantity. The header is created alone (date, supplier, BONDED/0,
+(קבלות סחורה מספק, DOCUMENTS_P) of the file's final goods invoice into warehouse ${BONDED_WAREHOUSE}, location 0,
+and sets every line to the invoice quantity. The header is created alone (date, supplier, ${BONDED_WAREHOUSE}/0,
 invoice, currency); Priority pulls the lines from the invoice; the pulled lines must equal the
 invoice's product lines part by part, otherwise the draft is left untouched and reported as
 incomplete. The receipt STAYS A DRAFT: bonded_receipt_finalize makes it final (owner's approval code).
-Refuses when: the file is closed or its warehouse is not BONDED; a goods invoice is still temporary;
+Refuses when: the file is closed or its warehouse is not ${BONDED_WAREHOUSE}; a goods invoice is still temporary;
 the existing receipts could not be read; the date is in the future; an earlier create is still
 unconfirmed (180 s). An existing final receipt → already-done. An existing draft → continued.
 A goods line without an import declaration is reported as a warning, not a refusal.
@@ -172,7 +173,7 @@ ${"מע'מ"} line the program copies from the broker invoice (it is not a produc
 content, even at 0, is pulled into the release). If Priority refuses the delete, the line's quantity
 is set to 0 instead and a warning says so. Then it verifies that the content equals the product
 lines of the goods invoice, part by part.
-Refuses when: the file is closed; there is no FINAL receipt into BONDED; the content already holds
+Refuses when: the file is closed; there is no FINAL receipt into ${BONDED_WAREHOUSE}; the content already holds
 product lines that differ from the invoice (fix in the screen — the program is not run twice).
 Content already equal and no VAT line → already-done. Products in place but a VAT line still in
 the content → only that line is removed (on a closed file a 0 line is left, with a warning).
@@ -190,7 +191,7 @@ country of origin. Per the SOP it is repeated after every change to the file and
 so a second run is allowed (never "already-done"). The result carries ranAt; impfile_close and
 impfile_preflight show the last confirmed run as lastCalcViaTool.
 Refuses when: the file is closed; an invoice is still temporary; there is no final receipt into
-BONDED; the content is empty or still holds a non-zero ${"מע'מ"} line.
+${BONDED_WAREHOUSE}; the content is empty or still holds a non-zero ${"מע'מ"} line.
 The close itself ("סגירת התיק") is impfile_close_run, with the owner's approval code.
 ${PROGRAM_CONTRACT}
 ${COMMON}`,
@@ -201,7 +202,7 @@ ${COMMON}`,
   server.tool(
     'bonded_release_draft',
     `שלב 8 — תעודת שחרור ממחסן הערובה, בטיוטה. Creates (or continues) a DRAFT release
-(קבלות סחורה ממחסן ערובה, DOCUMENTS_J) of a CLOSED import file from BONDED/0 into the receiving
+(קבלות סחורה ממחסן ערובה, DOCUMENTS_J) of a CLOSED import file from ${BONDED_WAREHOUSE}/0 into the receiving
 warehouse, with the release's import declaration, and sets the quantities: the whole balance in
 bond, or the parts and quantities listed in 'quantities' (partial release; unlisted parts stay 0).
 The header is created alone; Priority pulls the lines from the file content; the pulled lines must
@@ -235,7 +236,12 @@ ${COMMON}`,
         .max(200)
         .optional()
         .describe('Partial release: parts and quantities. Omit to release the whole balance.'),
-      toWarehouse: z.string().min(1).max(20).default('Main').describe('Receiving warehouse'),
+      toWarehouse: z
+        .string()
+        .min(1)
+        .max(20)
+        .default(DEFAULT_RELEASE_WAREHOUSE)
+        .describe('Receiving warehouse'),
       toLocation: z.string().min(1).max(20).default('0').describe('Receiving location'),
       allowWithoutCostInvoice: z
         .boolean()

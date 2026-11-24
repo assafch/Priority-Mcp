@@ -4,6 +4,7 @@ import { toMcpError } from '../client/errors.js';
 import type { PriorityClient } from '../client/priority-client.js';
 import { WebSdkSession, deriveWebSdkLoginConfig, loadWebSdk } from '../client/web-sdk.js';
 import type { Config } from '../config.js';
+import { BONDED_WAREHOUSE } from '../lib/site-codes.js';
 import { textResult } from '../lib/write-guard.js';
 import {
   type FinalDeps,
@@ -94,9 +95,9 @@ export function registerImpfileFinalStepTools(
     'bonded_receipt_finalize',
     `שלב 4ב — קבלת הסחורה לערובה: טיוטא → סופית. Makes a DRAFT goods receipt (DOCUMENTS_P) of the
 import file final: one PATCH of the status to 'סופית', nothing else. Afterwards the status and the
-stock are re-read: every product must have gone up by its quantity at BONDED/0.
+stock are re-read: every product must have gone up by its quantity at ${BONDED_WAREHOUSE}/0.
 Refuses when: the receipt is not a draft (final → already-done); the file is closed; the receipt is
-not into BONDED/0, or not of a final goods invoice of this file; the file has another receipt that is
+not into ${BONDED_WAREHOUSE}/0, or not of a final goods invoice of this file; the file has another receipt that is
 not cancelled; the receipt still carries a 000 or a ${"מע'מ"} line; a line's quantity differs from its
 pulled quantity; the quantities per part differ from the invoice's product lines.
 Next: bonded_fill_detail.
@@ -119,7 +120,7 @@ ${CONTRACT}`,
     'impfile_close_run',
     `שלב 7 — סגירת התיק. Runs Priority's program "סגירת התיק" (IMPFILE1) on an OPEN import file and
 verifies by re-reading that the file is closed (CLOSED = Y).
-Refuses when: an earlier step is not proven (final invoices, final receipt into BONDED, content equal
+Refuses when: an earlier step is not proven (final invoices, final receipt into ${BONDED_WAREHOUSE}, content equal
 to the invoice, customs estimate complete); a ${"מע'מ"} line with a quantity is left in the content; the
 loading calc (impfile_run_calc) did not run through the tool, or a declaration, receipt, receipt
 final or fill-detail step ran after it — run the calc again first. The calc freshness is judged
@@ -137,7 +138,7 @@ ${CONTRACT}`,
     `שלב 10 — תעודת שחרור: טיוטא → סופית. Makes a DRAFT release (DOCUMENTS_J) of a CLOSED import
 file final: one PATCH of the status to 'סופית', the only write the server's release lock lets
 through, and only from this tool. Afterwards the status and the stock are re-read: each product
-must have left BONDED/0 and arrived at the release's target warehouse.
+must have left ${BONDED_WAREHOUSE}/0 and arrived at the release's target warehouse.
 Refuses when: the release is not of this file or not a draft (final → already-done); the file is
 not closed; a ${"מע'מ"} line with a quantity is on it; a line has quantity 0 (partial releases by
 zero lines are not supported) or more than was pulled; a line has no import costs — run
