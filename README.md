@@ -66,7 +66,7 @@ Works with **Claude Desktop**, **Claude Code**, **Cursor**, **Windsurf**, and an
   </tr>
 </table>
 
-The server runs a whole import file (תיק יבוא) in Priority's own order, as written in its two
+The server has a tool for every step of an import file (תיק יבוא), in Priority's own order, as written in its two
 SOPs: import files (LBI2400273) and the bonded warehouse (LBI2400656). It goes from opening the
 file, through the bonded warehouse, to the landed cost of every product. Ask for it in plain
 language:
@@ -97,19 +97,20 @@ language:
 | 11 | Costing, company-wide | `costing_run` | תמחיר לתאריך נוכחי (`FNCCOSTINGPART`) | **Final**, approval code | Not yet |
 | 12 | Landed cost per product | `impfile_cost_report` | | Read | |
 
-<sub>Write, Draft and Program steps preview first and can be corrected. **Final** steps cannot be
-undone. ¹ The pilot covers `pinvoice_set_declaration`. ² Piloted when the tool zeroed the VAT line; it
+<sub>Write, Draft and Program steps preview first. **Final** steps cannot be undone. ¹ The pilot covers `pinvoice_set_declaration`. ² Piloted when the tool zeroed the VAT line; it
 now deletes that line, and the delete has not run live yet. An empty cell means the tool is not
 part of the supervised-pilot list. Every result carries `piloted: true | false`, so an assistant
 knows when a first real run needs the owner watching.</sub>
 
 ### What keeps it safe
 
-- **Preview first.** Every step defaults to `dryRun: true`: it checks everything, sends nothing,
+- **Preview first.** Every write defaults to `dryRun: true`: it checks everything, sends nothing,
   and returns what it would do.
-- **Order is enforced.** A step refuses unless the earlier steps are proven in Priority. A repeat of
-  a finished step changes nothing and answers `already-done`.
-- **Done means re-read.** A step reports `done` only after it reads Priority again and finds the
+- **Order is enforced.** The ten step tools (step 2's declaration and steps 4 to 11) refuse unless
+  the earlier steps are proven in Priority. A repeat of a finished step changes nothing and answers
+  `already-done`. The one exception is the loading calculation, which Priority's SOP repeats after
+  every change to the file.
+- **Done means re-read.** A step tool reports `done` only after it reads Priority again and finds the
   result. The two final-status steps also check that the stock moved by the right quantities. A run
   it cannot prove is `unverified`, never `done`.
 - **Priority's own programs, run once.** Programs start through the Web SDK and are never retried.
@@ -561,7 +562,8 @@ The overview, the step table and the safety model are in
 #### Reversible steps — preview by default (6)
 
 Each previews by default (`dryRun: true`), refuses unless the earlier steps are proven, changes
-nothing on a repeat, and reports `done` only from a re-read. None writes a document status.
+nothing on a repeat (except `impfile_run_calc`, which is meant to be re-run after every change),
+and reports `done` only from a re-read. None writes a document status.
 
 | Tool | Step | Description |
 |:-----|:----:|:------------|
@@ -709,7 +711,7 @@ Only after a human reviews this would you re-issue the call with `"confirm": tru
 
 Independent safety layers protect every write:
 
-- **Preview by default** — generic write tools default to `confirm: false` (and the 18 domain write
+- **Preview by default** — generic write tools default to `confirm: false` (and the domain write
   tools default to `dryRun: true`), returning the payload/endpoint without sending anything.
 - **Read-only mode** — set `PRIORITY_READ_ONLY=true` to disable all writes globally (enforced in the
   tool layer *and* in the HTTP client).
