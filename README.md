@@ -57,7 +57,7 @@ Works with **Claude Desktop**, **Claude Code**, **Cursor**, **Windsurf**, and an
   <img src="docs/assets/import-file-flow.svg" alt="The twelve official steps of an import file, from opening the file to landed cost per item, and the tool that runs each step" width="100%" />
 </p>
 
-<table>
+<table align="center">
   <tr>
     <td align="center"><strong>32</strong><br/><sub>import-file tools</sub></td>
     <td align="center"><strong>12 of 12</strong><br/><sub>official steps have a tool</sub></td>
@@ -66,9 +66,10 @@ Works with **Claude Desktop**, **Claude Code**, **Cursor**, **Windsurf**, and an
   </tr>
 </table>
 
-The server runs a whole import file (תיק יבוא) in Priority's own order: SOP "תיקי יבוא"
-(LBI2400273) and "עבודה עם מחסן ערובה" (LBI2400656). It goes from opening the file, through the
-bonded warehouse (מחסן ערובה), to the landed cost of every product. Ask for it in plain language:
+The server runs a whole import file (תיק יבוא) in Priority's own order, as written in its two
+SOPs: import files (LBI2400273) and the bonded warehouse (LBI2400656). It goes from opening the
+file, through the bonded warehouse, to the landed cost of every product. Ask for it in plain
+language:
 
 > *"Where does import file IM99000001 stand, and what is the next step?"*
 >
@@ -80,23 +81,24 @@ bonded warehouse (מחסן ערובה), to the landed cost of every product. Ask
 
 ### Step by step
 
-| # | Step | Tool | Priority program | Type | Supervised pilot |
+| # | Step | Tool | Priority program | Type | Pilot |
 |:-:|:-----|:-----|:-----------------|:-----|:----------------:|
-| 1 | Open the file | `impfile_open` | | Write, preview first | |
-| 2 | Link the invoices, declaration on every goods line | `pinvoice_create` · `impfile_link_invoice` · `pinvoice_set_declaration` | | Write, preview first | ✅ ¹ |
-| 3 | Close the invoices | `priority_close_invoice` | סגירת חשבונית (`CLOSEANINVOICE`) | **Cannot be undone**, owner approves each invoice | |
-| 4 | Receipt into the bonded warehouse | `bonded_receipt` | | Draft, preview first | ✅ |
-| 4b | Receipt final | `bonded_receipt_finalize` | | **Cannot be undone**, approval code | Not yet |
-| 5 | Fill the bonded detail | `bonded_fill_detail` | מילוי פירוט למחסן ערובה (`FILL_IMPFILES`) | Program, preview first | ✅ ² |
-| 6 | Loading calculation | `impfile_run_calc` | חישוב העמסה (`IMPFILE2`) | Program, preview first | ✅ |
-| 7 | Close the file | `impfile_close_run` | סגירת התיק (`IMPFILE1`) | **Cannot be undone**, approval code | Not yet |
-| 8 | Release document (draft) | `bonded_release_draft` | | Draft, preview first | ✅ |
-| 9 | Import costs per line | `bonded_line_costs` | רישום עלויות יבוא לשורה (`IMPORTCOSTPERLINE`) | Program, preview first | ✅ |
-| 10 | Release final | `bonded_release_finalize` | | **Cannot be undone**, approval code | Not yet |
-| 11 | Costing, company-wide | `costing_run` | תמחיר לתאריך נוכחי (`FNCCOSTINGPART`) | **Cannot be undone**, approval code | Not yet |
-| 12 | Landed cost per product | `impfile_cost_report` | | Read only | |
+| 1 | Open the file | `impfile_open` | | Write | |
+| 2 | Link the invoices, declaration on every goods line | `pinvoice_create` · `impfile_link_invoice` · `pinvoice_set_declaration` | | Write | ✅ ¹ |
+| 3 | Close the invoices | `priority_close_invoice` | סגירת חשבונית (`CLOSEANINVOICE`) | **Final**, owner approves | |
+| 4 | Receipt into the bonded warehouse | `bonded_receipt` | | Draft | ✅ |
+| 4b | Receipt final | `bonded_receipt_finalize` | | **Final**, approval code | Not yet |
+| 5 | Fill the bonded detail | `bonded_fill_detail` | מילוי פירוט למחסן ערובה (`FILL_IMPFILES`) | Program | ✅ ² |
+| 6 | Loading calculation | `impfile_run_calc` | חישוב העמסה (`IMPFILE2`) | Program | ✅ |
+| 7 | Close the file | `impfile_close_run` | סגירת התיק (`IMPFILE1`) | **Final**, approval code | Not yet |
+| 8 | Release document (draft) | `bonded_release_draft` | | Draft | ✅ |
+| 9 | Import costs per line | `bonded_line_costs` | רישום עלויות יבוא לשורה (`IMPORTCOSTPERLINE`) | Program | ✅ |
+| 10 | Release final | `bonded_release_finalize` | | **Final**, approval code | Not yet |
+| 11 | Costing, company-wide | `costing_run` | תמחיר לתאריך נוכחי (`FNCCOSTINGPART`) | **Final**, approval code | Not yet |
+| 12 | Landed cost per product | `impfile_cost_report` | | Read | |
 
-<sub>¹ The pilot covers `pinvoice_set_declaration`. ² Piloted when the tool zeroed the VAT line; it
+<sub>Write, Draft and Program steps preview first and can be corrected. **Final** steps cannot be
+undone. ¹ The pilot covers `pinvoice_set_declaration`. ² Piloted when the tool zeroed the VAT line; it
 now deletes that line, and the delete has not run live yet. An empty cell means the tool is not
 part of the supervised-pilot list. Every result carries `piloted: true | false`, so an assistant
 knows when a first real run needs the owner watching.</sub>
