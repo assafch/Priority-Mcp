@@ -1728,7 +1728,8 @@ export async function createReleaseDraft(
           documentStatus: current.STATDES,
           lines: describeLines(lines),
           ...(plan.ignoredVat ? { warnings: [vatWarning(continues, plan.ignoredVat)] } : {}),
-          nextStep: 'bonded_line_costs על התעודה, ואז bonded_release_finalize לסופית (באישור הבעלים).',
+          nextStep:
+            'bonded_line_costs על התעודה, ואז bonded_release_finalize לסופית (באישור הבעלים).',
         },
       );
     }
@@ -1989,7 +1990,8 @@ export async function createReleaseDraft(
           lines: describeLines(afterLines),
           sent,
           warnings,
-          nextStep: 'bonded_line_costs על התעודה, ואז bonded_release_finalize לסופית (באישור הבעלים).',
+          nextStep:
+            'bonded_line_costs על התעודה, ואז bonded_release_finalize לסופית (באישור הבעלים).',
         },
       ),
     );
